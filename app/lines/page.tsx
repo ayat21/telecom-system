@@ -26,7 +26,7 @@ const router = useRouter();
     totalSales: 0,
   });
 
-  const role = localStorage.getItem("role") || "";
+  const [role, setRole] = useState("");
 const isSuperAdmin = role === "super_admin";
 const isAdmin = role === "admin";
 const isViewer = role === "viewer";
