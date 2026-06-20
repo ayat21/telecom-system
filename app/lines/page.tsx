@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import * as XLSX from "xlsx";
+import { useRouter } from "next/navigation";
 
 export default function LinesPage() {
   const [lines, setLines] = useState<any[]>([]);
@@ -14,7 +15,7 @@ export default function LinesPage() {
 const [almanafiz, setAlmanafiz] = useState("");
 const [fromDate, setFromDate] = useState("");
 const [toDate, setToDate] = useState("");
-
+const router = useRouter();
   const PAGE_SIZE = 50;
 
   const [stats, setStats] = useState({
@@ -25,13 +26,19 @@ const [toDate, setToDate] = useState("");
     totalSales: 0,
   });
 
+  const role = localStorage.getItem("role") || "";
+const isSuperAdmin = role === "super_admin";
+const isAdmin = role === "admin";
+const isViewer = role === "viewer";
+
   async function loadLines() {
   setLoading(true);
 
-  let query = supabase
-    .from("lines")
-    .select("*")
-    .order("id", { ascending: false });
+let query = supabase
+  .from("lines")
+  .select("*")
+  .or("is_deleted.is.null,is_deleted.eq.false")
+  .order("id", { ascending: false });
 
   if (search.trim()) {
     query = query.or(
@@ -79,12 +86,61 @@ if (toDate) {
   );
 
   const { data, error } = await query;
+  console.log("LINES DATA", data);
 
   if (!error) {
     setLines(data || []);
   }
 
   setLoading(false);
+}
+async function deleteLine(id: number) {
+
+  if (
+    !confirm(
+      "هل أنت متأكد من حذف الخط؟"
+    )
+  )
+    return;
+
+  const row =
+    lines.find(
+      (x: any) =>
+        x.id === id
+    );
+
+  await supabase
+    .from("audit_logs")
+    .insert({
+      user_name:
+        localStorage.getItem(
+          "full_name"
+        ) || "Unknown",
+
+      action_type: "DELETE",
+
+      table_name: "lines",
+
+      record_id: id,
+
+      old_data: row,
+    });
+
+  console.log("DELETE ID =", id);
+
+const { data, error } = await supabase
+  .from("lines")
+  .update({
+    is_deleted: true,
+  })
+  .eq("id", Number(id))
+  .select();
+
+console.log("UPDATED ROWS =", data);
+console.log("ERROR =", error);
+
+await loadLines();
+console.log(error);
 }
 
   async function loadStats() {
@@ -339,12 +395,41 @@ className="bg-blue-500 hover:bg-blue-700 transition text-white px-6 py-3 rounded
                     {line.total_price}
                   </td>
                  <td className="p-3">
-                <Link
-                    href={`/lines/${line.id}`}
-                    className="bg-sky-500 hover:bg-sky-600 transition text-white px-4 py-2 rounded-lg shadow-sm"
-                >
-                    تعديل
-                </Link>
+               <td className="flex gap-2">
+
+  <button
+    onClick={() =>
+      router.push(`/lines/view/${line.id}`)
+    }
+    className="bg-sky-500 hover:bg-sky-600 text-white px-3 py-2 rounded-lg"
+  >
+    👁 
+  </button>
+
+ {(isSuperAdmin || isAdmin) && (
+  <button
+    onClick={() =>
+      router.push(`/lines/${line.id}`)
+    }
+    className="bg-green-600 text-white px-3 py-2 rounded-lg"
+  >
+    ✏️
+  </button>
+)}
+
+  {(isSuperAdmin ) &&(
+  <button
+    onClick={() =>
+      deleteLine(line.id)
+    }
+    className="bg-red-600 text-white px-3 py-2 rounded-lg"
+  >
+    🗑
+  </button>
+)}
+
+</td>
+                
                 </td>
                 </tr>
 

@@ -1,10 +1,5 @@
-import { Tajawal } from "next/font/google";
 import "./globals.css";
-
-const tajawal = Tajawal({
-  subsets: ["arabic"],
-  weight: ["400", "500", "700"],
-});
+import DashboardLayout from "@/app/components/DashboardLayout";
 
 export default function RootLayout({
   children,
@@ -12,9 +7,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ar" dir="rtl">
-      <body className={tajawal.className}>
-        {children}
+    <html lang="ar">
+      <body dir="rtl">
+        <DashboardLayout>
+          {children}
+        </DashboardLayout>
       </body>
     </html>
   );
