@@ -2,8 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 export default function PackagesPage() {
+   const router = useRouter();
+      const [authorized, setAuthorized] = useState(false);
+    
+      useEffect(() => {
+        const role = localStorage.getItem("role");
+    
+        if (!role) {
+          router.replace("/login");
+          return;
+        }
+    
+        setAuthorized(true);
+      }, []);
   const [packages, setPackages] = useState<any[]>([]);
   const [provider, setProvider] = useState("");
   const [type, setType] = useState("");
@@ -67,7 +81,9 @@ export default function PackagesPage() {
 
     return providerMatch && typeMatch;
   });
-
+if (!authorized) {
+    return null;
+  }
   return (
     <div className="min-h-screen bg-slate-50 p-8" dir="rtl">
       <div className="max-w-7xl mx-auto">

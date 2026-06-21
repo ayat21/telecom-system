@@ -7,6 +7,21 @@ import { useRouter } from "next/navigation";
 import router from "next/router";
 
 export default function UsersPage() {
+
+  const router = useRouter();
+    const [authorized, setAuthorized] = useState(false);
+  
+    useEffect(() => {
+      const role = localStorage.getItem("role");
+  
+      if (!role) {
+        router.replace("/login");
+        return;
+      }
+  
+      setAuthorized(true);
+    }, []);
+  
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [fullName, setFullName] = useState("");
@@ -81,19 +96,8 @@ const [password, setPassword] =
   useEffect(() => {
     loadUsers();
   }, []);
-const [authorized, setAuthorized] =
-  useState(false);
 
-useEffect(() => {
-  const role =
-    localStorage.getItem("role");
 
-  if (role === "super_admin") {
-    setAuthorized(true);
-  } else {
-    router.push("/");
-  }
-}, []);
 
 if (!authorized) {
   return null;

@@ -1,5 +1,20 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default function HomePage() {
-  redirect("/reports/sales");
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+export default function Home() {
+  const router = useRouter();
+
+  useEffect(() => {
+    const role = localStorage.getItem("role");
+
+    if (role) {
+      router.replace("/reports/sales");
+    } else {
+      router.replace("/login");
+    }
+  }, []);
+
+  return null;
 }

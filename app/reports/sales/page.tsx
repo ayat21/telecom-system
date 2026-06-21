@@ -28,6 +28,7 @@ import {
   ChevronLeft,
   Star,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 // ============================================================
 // Types
@@ -159,6 +160,21 @@ function SectionCard({
 // ============================================================
 
 export default function SalesPage() {
+  const router = useRouter();
+  const [authorized, setAuthorized] = useState(false);
+
+  useEffect(() => {
+    const role = localStorage.getItem("role");
+
+    if (!role) {
+      router.replace("/login");
+      return;
+    }
+
+    setAuthorized(true);
+  }, []);
+
+ 
     const [lines, setLines] =
     useState<any[]>([]);
 
@@ -367,6 +383,7 @@ async function loadData() {
   // --------------------------------------------------------
 
   async function exportReport() {
+    
     const XLSX = await import("xlsx");
 
     const summarySheet = [
@@ -410,7 +427,10 @@ async function loadData() {
   // --------------------------------------------------------
   // Render
   // --------------------------------------------------------
-
+ 
+ if (!authorized) {
+    return null;
+  }
   return (
     <div dir="rtl" className="p-6 bg-slate-50 min-h-screen font-sans">
       {/* Header */}

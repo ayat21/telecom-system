@@ -49,9 +49,7 @@ localStorage.setItem(
   userData.role
 );
 
-console.log("AUTH ID", data.user.id);
-console.log("USER DATA", userData);
-console.log("USER ERROR", userError);
+
 
       if (!userData) {
         alert("المستخدم غير موجود");
@@ -60,10 +58,8 @@ console.log("USER ERROR", userError);
 
       localStorage.setItem("role", userData.role);
       localStorage.setItem("full_name", userData.full_name);
-      console.log("LOGIN SUCCESS");
-      console.log("AUTH USER", data.user);
-      console.log("DB USER", userData);
-      router.push("reports//sales");
+     
+      router.push("/reports/sales");
       router.refresh();
     } catch (err) {
       console.error(err);
