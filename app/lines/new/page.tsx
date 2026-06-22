@@ -205,8 +205,8 @@ export default function NewLine() {
     calls_package: form.calls_package,
     calls_package_price: Number(form.calls_package_price || 0),
 
-    internet_package_name:
-      form.internet_package_name,
+    package_name:
+      form.package_name,
     internet_package_price: Number(
       form.internet_package_price || 0
     ),
@@ -493,7 +493,7 @@ export default function NewLine() {
                   );
                   setForm((prev) => ({
                     ...prev,
-                   internet_package_name: selected?.internet_package_name || "",
+                   package_name: selected?.package_name || "",
                     internet_package_price: String(selected?.price || ""),
                   }));
                 }}
