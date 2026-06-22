@@ -421,7 +421,7 @@ export default function DepartmentsPage() {
     );
   }
 
-  const tabContent: Record<TabId, () => JSX.Element> = {
+ const tabContent: Record<TabId, () => React.ReactNode> = {
     departments: renderDepartments,
     groups:      renderGroups,
     almanafiz:   renderAlmanafiz,
