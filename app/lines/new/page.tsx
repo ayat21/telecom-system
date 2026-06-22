@@ -19,6 +19,11 @@ import {
   Building2,
   ListTree,
   Banknote,
+  MapPin,
+  IdCard,
+  ScanLine,
+  ImagePlus,
+  Upload,
 } from "lucide-react";
 
 // ============================================================
@@ -71,27 +76,108 @@ function SectionTitle({
 
 export default function NewLine() {
   const [loading, setLoading] = useState(false);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  const [providers, setProviders] = useState<any[]>([]);
+  const [almanafizList, setAlmanafizList] = useState<any[]>([]);
+  const [callsPackages, setCallsPackages] = useState<any[]>([]);
+  const [internetPackages, setInternetPackages] = useState<any[]>([]);
+  const [services, setServices] = useState<any[]>([]);
 
   const [form, setForm] = useState({
     number: "",
     account_no: "",
     customer_name: "",
     customer_date: "",
+    serial_number: "",
+    address: "",
+    national_id: "",
     almanafiz: "",
     calls_package: "",
-    calls_package_price: "",
-    internet_package_name: "",
-    internet_package_price: "",
+   provider_name: "",
+    package_name: "",
     line_extension_name: "",
-    line_extension_price: "",
-    provider_name: "",
+    calls_package_price:"",
+    internet_package_price:"",
+    line_extension_price:"",
     note: "",
+    national_id_image:"",
     report_note: "",
     agent_name: "",
     department: "",
     group_name: "",
     total_price: "",
   });
+
+  useEffect(() => {
+    loadLookups();
+  }, []);
+
+  async function loadLookups() {
+    const { data: p, error: pError } =
+    await supabase.from("providers").select("*");
+
+  const { data: a, error: aError } =
+    await supabase.from("almanafiz").select("*");
+
+  console.log("PROVIDERS", p);
+  console.log("PROVIDERS ERROR", pError);
+
+  console.log("ALMANAFIZ", a);
+  console.log("ALMANAFIZ ERROR", aError);
+
+  setProviders(p || []);
+  setAlmanafizList(a || []);
+  }
+
+  async function handleProviderChange(providers: string) {
+    const { data: calls } = await supabase
+      .from("calls_packages")
+      .select("*")
+      .eq("provider_name", providers);
+
+    const { data: internet } = await supabase
+      .from("internet_packages")
+      .select("*")
+      .eq("provider_name", providers);
+
+    const { data: ext } = await supabase
+      .from("line_extensions")
+      .select("*")
+      .eq("provider_name", providers);
+
+    setCallsPackages(calls || []);
+    setInternetPackages(internet || []);
+    setServices(ext || []);
+
+    setForm((prev) => ({
+      ...prev,
+      provider_name: providers,
+      // تصفير الباقات المختارة لإن الباقات بتختلف باختلاف الشبكة
+      calls_package: "",
+      calls_package_price: "",
+      package_name: "",
+      internet_package_price: "",
+      line_extension_name: "",
+      line_extension_price: "",
+    }));
+  }
+
+  useEffect(() => {
+    const total =
+      Number(form.calls_package_price || 0) +
+      Number(form.internet_package_price || 0) +
+      Number(form.line_extension_price || 0);
+
+    setForm((prev) => ({
+      ...prev,
+      total_price: String(total),
+    }));
+  }, [
+    form.calls_package_price,
+    form.internet_package_price,
+    form.line_extension_price,
+  ]);
 
   async function save() {
     if (!form.number) {
@@ -101,16 +187,47 @@ export default function NewLine() {
 
     setLoading(true);
 
-    const { error } = await supabase.from("lines").insert({
-      ...form,
-      calls_package_price: Number(form.calls_package_price || 0),
+  const { error } = await supabase
+  .from("lines")
+  .insert({
+    number: form.number,
+    account_no: form.account_no,
+    customer_name: form.customer_name,
+    customer_date: form.customer_date,
+    serial_number: form.serial_number,
+    address: form.address,
+    national_id: form.national_id,
+    national_id_image: form.national_id_image,
 
-      internet_package_price: Number(form.internet_package_price || 0),
+    provider_name: form.provider_name,
+    almanafiz: form.almanafiz,
 
-      line_extension_price: Number(form.line_extension_price || 0),
+    calls_package: form.calls_package,
+    calls_package_price: Number(form.calls_package_price || 0),
 
-      total_price: Number(form.total_price || 0),
-    });
+    internet_package_name:
+      form.internet_package_name,
+    internet_package_price: Number(
+      form.internet_package_price || 0
+    ),
+
+    line_extension_name:
+      form.line_extension_name,
+    line_extension_price: Number(
+      form.line_extension_price || 0
+    ),
+
+    note: form.note,
+    report_note: form.report_note,
+
+    agent_name: form.agent_name,
+    department: form.department,
+    group_name: form.group_name,
+
+    total_price: Number(
+      form.total_price || 0
+    ),
+  });
 
     setLoading(false);
 
@@ -126,21 +243,26 @@ export default function NewLine() {
       account_no: "",
       customer_name: "",
       customer_date: "",
+      serial_number: "",
+      address: "",
+      national_id_image:"",
+      national_id: "",
       almanafiz: "",
       calls_package: "",
-      calls_package_price: "",
-      internet_package_name: "",
-      internet_package_price: "",
+      package_name: "",
       line_extension_name: "",
-      line_extension_price: "",
-      provider_name: "",
+  provider_name: "",
       note: "",
+       calls_package_price:"",
+    internet_package_price:"",
+    line_extension_price:"",
       report_note: "",
       agent_name: "",
       department: "",
       group_name: "",
       total_price: "",
     });
+    setImageFile(null);
   }
   const router = useRouter();
   useEffect(() => {
@@ -156,6 +278,7 @@ export default function NewLine() {
       [field]: value,
     }));
   }
+ 
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-6 md:p-8">
@@ -208,73 +331,239 @@ export default function NewLine() {
               onChange={(v) => update("customer_name", v)}
             />
             <Field
-              label="تاريخ العميل"
-              icon={Calendar}
-              value={form.customer_date}
-              onChange={(v) => update("customer_date", v)}
+              label="سيريال نمبر"
+              icon={ScanLine}
+              value={form.serial_number}
+              onChange={(v) => update("serial_number", v)}
             />
+            <Field
+              label="العنوان"
+              icon={MapPin}
+              value={form.address}
+              onChange={(v) => update("address", v)}
+            />
+            <Field
+              label="الرقم القومى"
+              icon={IdCard}
+              value={form.national_id}
+              onChange={(v) => update("national_id", v)}
+            />
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">
+                تاريخ العميل
+              </label>
+              <div className="relative">
+                <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="date"
+                  value={form.customer_date}
+                  onChange={(e) => update("customer_date", e.target.value)}
+                  className="w-full border border-slate-200 bg-slate-50 text-slate-900 pr-10 pl-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">
+                صورة بطاقة العميل
+              </label>
+              <label className="w-full border border-slate-200 bg-slate-50 text-slate-500 pr-10 pl-3 py-3 rounded-xl flex items-center gap-2 cursor-pointer hover:bg-slate-100 transition relative text-sm">
+                <ImagePlus className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <span className="truncate">
+                 {imageFile ? imageFile.name : "اختر صورة البطاقة"}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) =>
+                    setImageFile(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+            </div>
           </div>
         </div>
 
         {/* Network info */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
+        <div className="bg-white rounded-2xl shadow-sm border slate-100 p-6 mb-5">
           <SectionTitle title="بيانات الشبكة" icon={Network} />
           <div className="grid md:grid-cols-2 gap-4">
-            <Field
-              label="المنفذ"
-              icon={Plug}
-              value={form.almanafiz}
-              onChange={(v) => update("almanafiz", v)}
-            />
-            <Field
-              label="الشبكة"
-              icon={Network}
-              value={form.provider_name}
-              onChange={(v) => update("provider_name", v)}
-            />
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Network className="w-3.5 h-3.5" />
+                الشبكة
+              </label>
+              <select
+                value={form.provider_name}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+              >
+                <option value="">اختر الشبكة</option>
+                {providers.map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
+                    
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Plug className="w-3.5 h-3.5" />
+                المنفذ
+              </label>
+              <select
+                value={form.almanafiz}
+                onChange={(e) => update("almanafiz", e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+              >
+                <option value="">اختر المنفذ</option>
+                {almanafizList.map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
         {/* Packages */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
           <SectionTitle title="الباقات والإضافات" icon={Package} />
+          {!form.name && (
+            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4">
+              اختاري الشبكة الأول عشان الباقات المتاحة تظهر هنا
+            </p>
+          )}
           <div className="grid md:grid-cols-2 gap-4">
-            <Field
-              label="باقة المكالمات"
-              icon={Package}
-              value={form.calls_package}
-              onChange={(v) => update("calls_package", v)}
-            />
-            <Field
-              label="سعر باقة المكالمات"
-              icon={Banknote}
-              value={form.calls_package_price}
-              onChange={(v) => update("calls_package_price", v)}
-            />
-            <Field
-              label="باقة الإنترنت"
-              icon={Package}
-              value={form.internet_package_name}
-              onChange={(v) => update("internet_package_name", v)}
-            />
-            <Field
-              label="سعر باقة الإنترنت"
-              icon={Banknote}
-              value={form.internet_package_price}
-              onChange={(v) => update("internet_package_price", v)}
-            />
-            <Field
-              label="الإضافة"
-              icon={Package}
-              value={form.line_extension_name}
-              onChange={(v) => update("line_extension_name", v)}
-            />
-            <Field
-              label="سعر الإضافة"
-              icon={Banknote}
-              value={form.line_extension_price}
-              onChange={(v) => update("line_extension_price", v)}
-            />
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Package className="w-3.5 h-3.5" />
+                باقة المكالمات
+              </label>
+              <select
+                value={form.calls_package}
+                onChange={(e) => {
+                  const selected = callsPackages.find(
+                    (x) => x.package_name === e.target.value
+                  );
+                  setForm((prev) => ({
+                    ...prev,
+                    calls_package: selected?.package_name || "",
+                    calls_package_price: String(selected?.price || ""),
+                  }));
+                }}
+                className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+              >
+                <option value="">باقة المكالمات</option>
+                {callsPackages.map((item) => (
+                  <option key={item.id} value={item.package_name}>
+                    {item.package_name}
+                 
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Banknote className="w-3.5 h-3.5" />
+                سعر باقة المكالمات
+              </label>
+              <input              
+                  value={form.calls_package_price}
+  onChange={(e) =>
+    update("calls_package_price", e.target.value)
+  }
+  className="w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm font-medium"      />
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Package className="w-3.5 h-3.5" />
+                باقة الإنترنت
+              </label>
+              <select
+                value={form.package_name}
+                onChange={(e) => {
+                  const selected = internetPackages.find(
+                    (x) => x.package_name === e.target.value
+                  );
+                  setForm((prev) => ({
+                    ...prev,
+                   internet_package_name: selected?.internet_package_name || "",
+                    internet_package_price: String(selected?.price || ""),
+                  }));
+                }}
+                className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+              >
+                <option value="">باقة الإنترنت</option>
+                {internetPackages.map((item) => (
+                  <option key={item.id} value={item.package_name}>
+                    {item.package_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Banknote className="w-3.5 h-3.5" />
+                سعر باقة الإنترنت
+              </label>
+              <input
+                value={form.internet_package_price}
+  onChange={(e) =>
+    update("internet_package_price", e.target.value)
+  }
+  className="w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Package className="w-3.5 h-3.5" />
+                الإضافة
+              </label>
+              <select
+                value={form.line_extension_name}
+                onChange={(e) => {
+                  const selected = services.find(
+                    (x) => x.extension_name === e.target.value
+                  );
+                  setForm((prev) => ({
+                    ...prev,
+                    line_extension_name: selected?.extension_name || "",
+                    line_extension_price: String(selected?.price || ""),
+                  }));
+                }}
+                className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm"
+              >
+                <option value="">الإضافة</option>
+                {services.map((item) => (
+                  <option key={item.id} value={item.extension_name}>
+                    {item.extension_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Banknote className="w-3.5 h-3.5" />
+                سعر الإضافة
+              </label>
+              <input
+                
+                  value={form.line_extension_price}
+  onChange={(e) =>
+    update("line_extension_price", e.target.value)
+  }
+  className="w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm font-medium"
+              />
+            </div>
           </div>
         </div>
 
@@ -300,12 +589,17 @@ export default function NewLine() {
               value={form.group_name}
               onChange={(v) => update("group_name", v)}
             />
-            <Field
-              label="إجمالي السعر"
-              icon={Banknote}
-              value={form.total_price}
-              onChange={(v) => update("total_price", v)}
-            />
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Banknote className="w-3.5 h-3.5" />
+                إجمالي السعر
+              </label>
+              <input
+                disabled
+                value={form.total_price}
+                className="w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold"
+              />
+            </div>
           </div>
         </div>
 
@@ -363,3 +657,7 @@ export default function NewLine() {
     </div>
   );
 }
+
+
+
+

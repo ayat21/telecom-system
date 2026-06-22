@@ -79,7 +79,7 @@ export default function Sidebar() {
       : []),
 
     ...(role !== "viewer"
-      ? [{ name: "المنافذ", href: "/almanafiz" }]
+      ? [{ name: "المنافذ", href: "/manafiz" }]
       : []),
 
     ...(role === "super_admin"
@@ -102,7 +102,7 @@ export default function Sidebar() {
                 <Network className="w-[18px] h-[18px] text-white" />
               </span>
               <h1 className="text-lg font-bold leading-tight">
-                منصة إدارة الاتصالات
+               سيستم اتصالات تيليكوم
               </h1>
             </div>
 

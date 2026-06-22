@@ -79,8 +79,7 @@ localStorage.setItem(
         <div className="text-center mb-8">
 
           <h1 className="text-3xl font-bold text-slate-800">
-            منصة إدارة الاتصالات
-          </h1>
+سيستم اتصالات تيليكوم          </h1>
 
           <p className="text-slate-500 mt-2">
             تسجيل الدخول

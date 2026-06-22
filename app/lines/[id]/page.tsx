@@ -22,6 +22,11 @@ import {
   Banknote,
   History,
   Save,
+  MapPin,
+  IdCard,
+  ScanLine,
+  ImagePlus,
+  Upload,
 } from "lucide-react";
 
 // ============================================================
@@ -94,6 +99,11 @@ export default function EditLine({
   const [services, setServices] = useState<any[]>([]);
   const [originalLine, setOriginalLine] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
+  const [nationalId, setNationalId] = useState("");
+  const [address, setAddress] = useState("");
+  const [nationalIdImage, setNationalIdImage] = useState("");
+  const [serialNumber, setSerialNumber] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
 
   useEffect(() => {
     async function init() {
@@ -343,8 +353,50 @@ export default function EditLine({
                 }
               />
             </FieldWrap>
+            <FieldWrap label="سيريال نمبر" icon={ScanLine}>
+              <input
+                placeholder="سيريال نمبر"
+                className={inputClass}
+                value={line.serial_number || ""}
+                onChange={(e) =>
+                  setLine({
+                    ...line,
 
-            <FieldWrap label="تاريخ العميل" icon={Calendar}>
+                    serial_number: e.target.value,
+                  })
+                }
+              />
+            </FieldWrap>
+            <FieldWrap label="العنوان" icon={MapPin}>
+              <input
+                placeholder="العنوان"
+                className={inputClass}
+                value={line.address || ""}
+                onChange={(e) =>
+                  setLine({
+                    ...line,
+
+                    address: e.target.value,
+                  })
+                }
+              />
+            </FieldWrap>
+            <FieldWrap label="الرفم القومى" icon={IdCard}>
+              <input
+                placeholder="الرقم القومى"
+                className={inputClass}
+                value={line.national_id || ""}
+                onChange={(e) =>
+                  setLine({
+                    ...line,
+
+                    national_id: e.target.value,
+                  })
+                }
+              />
+            </FieldWrap>
+
+            <FieldWrap label="تاريخ بيع الخط" icon={Calendar}>
               <input
                 type="date"
                 className={inputClass}
@@ -357,6 +409,24 @@ export default function EditLine({
                   })
                 }
               />
+            </FieldWrap>
+            <FieldWrap label="صورة بطاقة العميل" icon={ImagePlus}>
+              <label
+                className={`${inputClass} flex items-center gap-2 cursor-pointer text-slate-500 hover:bg-slate-50 transition`}
+              >
+                <Upload className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="truncate">
+                  {imageFile ? imageFile.name : "اختر صورة البطاقة"}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) =>
+                    setImageFile(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
             </FieldWrap>
 
             <FieldWrap label="اسم المندوب" icon={Briefcase}>
@@ -483,12 +553,17 @@ export default function EditLine({
             </FieldWrap>
 
             <FieldWrap label="سعر باقة المكالمات" icon={Banknote}>
-              <input
-                disabled
-                className={disabledInputClass}
-                value={line.calls_package_price || ""}
-              />
-            </FieldWrap>
+  <input
+    className={inputClass}
+    value={line.calls_package_price || ""}
+    onChange={(e) =>
+      setLine({
+        ...line,
+        calls_package_price: e.target.value,
+      })
+    }
+  />
+</FieldWrap>
 
             <FieldWrap label="باقة النت" icon={Package}>
               <select
@@ -519,11 +594,16 @@ export default function EditLine({
             </FieldWrap>
 
             <FieldWrap label="سعر باقة النت" icon={Banknote}>
-              <input
-                disabled
-                className={disabledInputClass}
-                value={line.internet_package_price || ""}
-              />
+             <input
+    className={inputClass}
+    value={line.internet_package_price || ""}
+    onChange={(e) =>
+      setLine({
+        ...line,
+        internet_package_price: e.target.value,
+      })
+    }
+  />
             </FieldWrap>
 
             <FieldWrap label="الخدمة" icon={Package}>
@@ -556,10 +636,15 @@ export default function EditLine({
 
             <FieldWrap label="سعر الخدمة" icon={Banknote}>
               <input
-                disabled
-                className={disabledInputClass}
-                value={line.line_extension_price || ""}
-              />
+    className={inputClass}
+    value={line.line_extension_price || ""}
+    onChange={(e) =>
+      setLine({
+        ...line,
+        line_extension_price: e.target.value,
+      })
+    }
+  />
             </FieldWrap>
           </div>
 
