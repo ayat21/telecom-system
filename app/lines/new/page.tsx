@@ -432,7 +432,7 @@ export default function NewLine() {
         {/* Packages */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
           <SectionTitle title="الباقات والإضافات" icon={Package} />
-          {!form.name && (
+          {!form.package_name && (
             <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4">
               اختاري الشبكة الأول عشان الباقات المتاحة تظهر هنا
             </p>
