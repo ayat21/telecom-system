@@ -12,13 +12,13 @@ import {
 type PackageType = "مكالمات" | "نت" | "خدمة";
 type ModalMode = "add" | "edit" | null;
 
-const TABLE_MAP: Record<PackageType, string> = {
+const TABLE_MAP: Record<string, string> = {
   مكالمات: "calls_packages",
   نت: "internet_packages",
   خدمة: "line_extensions",
 };
 
-const NAME_FIELD: Record<PackageType, string> = {
+const NAME_FIELD: Record<string, string> = {
   مكالمات: "package_name",
   نت: "package_name",
   خدمة: "extension_name",
@@ -234,7 +234,7 @@ export default function PackagesPage() {
 
   if (!authorized) return null;
 
-  const typeColors: Record<PackageType, string> = {
+  const typeColors: Record<string, string> = {
     مكالمات: "bg-blue-50 text-blue-700",
     نت: "bg-green-50 text-green-700",
     خدمة: "bg-purple-50 text-purple-700",
