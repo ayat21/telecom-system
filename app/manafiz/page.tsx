@@ -12,6 +12,9 @@ import {
   Trash2,
   Loader2,
   ChevronLeft,
+  Edit2,
+  Check,
+  X,
 } from "lucide-react";
 
 // ============================================================
@@ -21,7 +24,7 @@ import {
 interface Department { id: number; name: string; }
 interface Group { id: number; name: string; department_id: number; department_name?: string; }
 interface Manfaz { id: number; name: string; group_id: number; group_name?: string; department_name?: string; }
-interface Heia { id: number; name: string; }
+interface Heia { id: number; name: string;group_id: number; group_name?: string; department_name?: string; }
 
 type TabId = "departments" | "groups" | "almanafiz" | "heiaat";
 
@@ -66,6 +69,11 @@ export default function DepartmentsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("departments");
   const [saving, setSaving] = useState(false);
 
+  // Editing state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingTable, setEditingTable] = useState("");
+
   // Data
   const [departments, setDepartments]   = useState<Department[]>([]);
   const [groups, setGroups]             = useState<Group[]>([]);
@@ -78,6 +86,7 @@ export default function DepartmentsPage() {
   const [groupDeptId, setGroupDeptId]   = useState("");
   const [manfazName, setManfazName]     = useState("");
   const [manfazGroupId, setManfazGroupId] = useState("");
+  const [heiaGroupId, setheiaGroupId] = useState("");
   const [heiaName, setHeiaName]         = useState("");
 
   // Auth check
@@ -91,13 +100,24 @@ export default function DepartmentsPage() {
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: d }, { data: g }, { data: a }, { data: h }] =
-      await Promise.all([
-        supabase.from("departments").select("*").order("name"),
-        supabase.from("groups").select("*, departments(name)").order("name"),
-        supabase.from("almanafiz").select("*, groups(name, departments(name))").order("name"),
-        supabase.from("heiaat").select("*").order("name"),
-      ]);
+    const [
+  { data: d, error: dError },
+  { data: g, error: gError },
+  { data: a, error: aError },
+  { data: h, error: hError },
+] = await Promise.all([
+  supabase.from("departments").select("*").order("name"),
+  supabase.from("groups").select("*, departments(name)").order("name"),
+  supabase.from("almanafiz").select("*, groups(name, departments(name))").order("name"),
+  supabase.from("heiaat").select("*, groups(name, departments(name))").order("name")
+]);
+
+console.log("DEPARTMENTS", d);
+console.log("DEPARTMENTS ERROR", dError);
+
+console.log("GROUPS ERROR", gError);
+console.log("ALMANAFIZ ERROR", aError);
+console.log("HEIAAT ERROR", hError);
 
     setDepartments(d || []);
     setGroups(
@@ -113,21 +133,42 @@ export default function DepartmentsPage() {
         department_name: x.groups?.departments?.name || "",
       }))
     );
-    setHeiaat(h || []);
+    setHeiaat (
+   (h || []).map((x: any) => ({
+        ...x,
+        group_name:      x.groups?.name || "",
+        department_name: x.groups?.departments?.name || "",
+      }))
+    );
   }
 
   // --------------------------------------------------------
   // Add handlers
   // --------------------------------------------------------
 
-  async function addDepartment() {
-    if (!deptName.trim()) return;
-    setSaving(true);
-    await supabase.from("departments").insert({ name: deptName.trim() });
-    setDeptName("");
-    await loadAll();
+ async function addDepartment() {
+  if (!deptName.trim()) return;
+
+  setSaving(true);
+
+  const { error } = await supabase
+    .from("departments")
+    .insert({
+      name: deptName.trim(),
+    });
+
+  console.log("DEPT ERROR", error);
+
+  if (error) {
+    alert(error.message);
     setSaving(false);
+    return;
   }
+
+  setDeptName("");
+  await loadAll();
+  setSaving(false);
+}
 
   async function addGroup() {
     if (!groupName.trim() || !groupDeptId) return;
@@ -154,12 +195,15 @@ export default function DepartmentsPage() {
     await loadAll();
     setSaving(false);
   }
-
   async function addHeia() {
-    if (!heiaName.trim()) return;
+    if (!heiaName.trim() || !heiaGroupId) return;
     setSaving(true);
-    await supabase.from("heiaat").insert({ name: heiaName.trim() });
+    await supabase.from("heiaat").insert({
+       name: heiaName.trim(),
+       group_id: Number(heiaGroupId),
+     });
     setHeiaName("");
+    setheiaGroupId("");
     await loadAll();
     setSaving(false);
   }
@@ -172,6 +216,36 @@ export default function DepartmentsPage() {
     if (!confirm("هل أنت متأكد من الحذف؟")) return;
     await supabase.from(table).delete().eq("id", id);
     await loadAll();
+  }
+
+  // --------------------------------------------------------
+  // Edit handlers
+  // --------------------------------------------------------
+
+  function startEditing(table: string, id: number, currentName: string) {
+    setEditingTable(table);
+    setEditingId(id);
+    setEditingName(currentName);
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setEditingName("");
+    setEditingTable("");
+  }
+
+  async function saveEditing() {
+    if (!editingName.trim() || !editingId || !editingTable) return;
+    
+    setSaving(true);
+    await supabase
+      .from(editingTable)
+      .update({ name: editingName.trim() })
+      .eq("id", editingId);
+    
+    cancelEditing();
+    await loadAll();
+    setSaving(false);
   }
 
   // --------------------------------------------------------
@@ -205,22 +279,59 @@ export default function DepartmentsPage() {
         {/* List */}
         <div className="space-y-2">
           {departments.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3"
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">
-                  {item.name.charAt(0)}
-                </span>
-                <span className="text-sm font-medium text-slate-800">{item.name}</span>
-              </div>
-              <button
-                onClick={() => deleteItem("departments", item.id)}
-                className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
-              </button>
+            <div key={item.id}>
+              {editingId === item.id && editingTable === "departments" ? (
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 gap-2">
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEditing();
+                      if (e.key === "Escape") cancelEditing();
+                    }}
+                    className="flex-1 border border-blue-300 bg-white px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    autoFocus
+                  />
+                  <button
+                    onClick={saveEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-green-100 hover:bg-green-200 flex items-center justify-center transition text-green-600"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition text-gray-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">
+                      {item.name.charAt(0)}
+                    </span>
+                    <span className="text-sm font-medium text-slate-800">{item.name}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => startEditing("departments", item.id, item.name)}
+                      className="w-7 h-7 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                    </button>
+                    <button
+                      onClick={() => deleteItem("departments", item.id)}
+                      className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {departments.length === 0 && (
@@ -268,25 +379,62 @@ export default function DepartmentsPage() {
         {/* List */}
         <div className="space-y-2">
           {groups.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-600 shrink-0">
-                  {item.name.charAt(0)}
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
-                  <p className="text-xs text-slate-400 truncate">{item.department_name}</p>
+            <div key={item.id}>
+              {editingId === item.id && editingTable === "groups" ? (
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 gap-2">
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEditing();
+                      if (e.key === "Escape") cancelEditing();
+                    }}
+                    className="flex-1 border border-blue-300 bg-white px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    autoFocus
+                  />
+                  <button
+                    onClick={saveEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-green-100 hover:bg-green-200 flex items-center justify-center transition text-green-600"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition text-gray-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              </div>
-              <button
-                onClick={() => deleteItem("groups", item.id)}
-                className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
-              </button>
+              ) : (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-600 shrink-0">
+                      {item.name.charAt(0)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
+                      <p className="text-xs text-slate-400 truncate">{item.department_name}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => startEditing("groups", item.id, item.name)}
+                      className="w-7 h-7 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                    </button>
+                    <button
+                      onClick={() => deleteItem("groups", item.id)}
+                      className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {groups.length === 0 && (
@@ -338,26 +486,65 @@ export default function DepartmentsPage() {
           {almanafiz.map((item) => (
             <div
               key={item.id}
-              className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-600 shrink-0">
-                  {item.name.charAt(0)}
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
-                  <p className="text-xs text-slate-400 truncate">
-                    {item.group_name}
-                    {item.department_name && ` — ${item.department_name}`}
-                  </p>
+              {editingId === item.id && editingTable === "almanafiz" ? (
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 gap-2">
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEditing();
+                      if (e.key === "Escape") cancelEditing();
+                    }}
+                    className="flex-1 border border-blue-300 bg-white px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    autoFocus
+                  />
+                  <button
+                    onClick={saveEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-green-100 hover:bg-green-200 flex items-center justify-center transition text-green-600"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition text-gray-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              </div>
-              <button
-                onClick={() => deleteItem("almanafiz", item.id)}
-                className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
-              </button>
+              ) : (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-600 shrink-0">
+                      {item.name.charAt(0)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
+                      <p className="text-xs text-slate-400 truncate">
+                        {item.group_name}
+                        {item.department_name && ` — ${item.department_name}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => startEditing("almanafiz", item.id, item.name)}
+                      className="w-7 h-7 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                    </button>
+                    <button
+                      onClick={() => deleteItem("almanafiz", item.id)}
+                      className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {almanafiz.length === 0 && (
@@ -373,18 +560,30 @@ export default function DepartmentsPage() {
       <>
         <SectionHeader title="الهيئات" icon={Briefcase} />
 
-        {/* Add form */}
-        <div className="flex gap-2 mb-5">
+          {/* Add form */}
+        <div className="flex flex-wrap gap-2 mb-5">
+          <select
+            value={heiaGroupId}
+            onChange={(e) => setheiaGroupId(e.target.value)}
+            className={selectClass}
+          >
+            <option value="">اختر الجروب</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} — {g.department_name}
+              </option>
+            ))}
+          </select>
           <input
             value={heiaName}
             onChange={(e) => setHeiaName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addHeia()}
-            placeholder="اسم الهيئة الجديدة"
+            placeholder="اسم المنفذ الجديد"
             className={inputClass}
           />
           <button
             onClick={addHeia}
-            disabled={saving || !heiaName.trim()}
+            disabled={saving || !heiaName.trim() || !heiaGroupId}
             className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
@@ -397,20 +596,65 @@ export default function DepartmentsPage() {
           {heiaat.map((item) => (
             <div
               key={item.id}
-              className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3"
             >
-              <div className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center text-xs font-bold text-amber-600">
-                  {item.name.charAt(0)}
-                </span>
-                <span className="text-sm font-medium text-slate-800">{item.name}</span>
-              </div>
-              <button
-                onClick={() => deleteItem("heiaat", item.id)}
-                className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
-              </button>
+              {editingId === item.id && editingTable === "heiaat" ? (
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 gap-2">
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEditing();
+                      if (e.key === "Escape") cancelEditing();
+                    }}
+                    className="flex-1 border border-blue-300 bg-white px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    autoFocus
+                  />
+                  <button
+                    onClick={saveEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-green-100 hover:bg-green-200 flex items-center justify-center transition text-green-600"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    disabled={saving}
+                    className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition text-gray-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-600 shrink-0">
+                      {item.name.charAt(0)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
+                      <p className="text-xs text-slate-400 truncate">
+                        {item.group_name}
+                        {item.department_name && ` — ${item.department_name}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => startEditing("heiaat", item.id, item.name)}
+                      className="w-7 h-7 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                    </button>
+                    <button
+                      onClick={() => deleteItem("heiaat", item.id)}
+                      className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {heiaat.length === 0 && (
