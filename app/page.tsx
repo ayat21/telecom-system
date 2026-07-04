@@ -111,7 +111,7 @@ export default function DashboardPage() {
     // ─── Providers ────────────────────────────────────────
     const provMap = new Map<string, number>();
     all.forEach((x) => {
-      const name = x.providers?.name || "غير محدد";
+      const name = (x.providers as any)?.name || "غير محدد";
       provMap.set(name, (provMap.get(name) || 0) + 1);
     });
     setProviderData([...provMap.entries()].map(([name, value]) => ({ name, value })));
@@ -119,8 +119,9 @@ export default function DashboardPage() {
     // ─── Top 5 Agents ─────────────────────────────────────
     const agentMap = new Map<string, number>();
     all.forEach((x) => {
-      if (!x.agents?.name) return;
-      agentMap.set(x.agents.name, (agentMap.get(x.agents.name) || 0) + 1);
+      const agentName = (x.agents as any)?.name;
+      if (!agentName) return;
+      agentMap.set(agentName, (agentMap.get(agentName) || 0) + 1);
     });
     setAgentData(
       [...agentMap.entries()]
@@ -132,8 +133,9 @@ export default function DashboardPage() {
     // ─── Top 5 Almanafiz ──────────────────────────────────
     const almMap = new Map<string, number>();
     all.forEach((x) => {
-      if (!x.almanafiz?.name) return;
-      almMap.set(x.almanafiz.name, (almMap.get(x.almanafiz.name) || 0) + 1);
+      const almanafizName = (x.almanafiz as any)?.name;
+      if (!almanafizName) return;
+      almMap.set(almanafizName, (almMap.get(almanafizName) || 0) + 1);
     });
     setAlmanafizData(
       [...almMap.entries()]
@@ -162,8 +164,9 @@ export default function DashboardPage() {
     // ─── Line Statuses ────────────────────────────────────
     const statusMap = new Map<string, number>();
     all.forEach((x) => {
-      if (!x.line_statuses?.name) return;
-      statusMap.set(x.line_statuses.name, (statusMap.get(x.line_statuses.name) || 0) + 1);
+      const statusName = (x.line_statuses as any)?.name;
+      if (!statusName) return;
+      statusMap.set(statusName, (statusMap.get(statusName) || 0) + 1);
     });
     setStatusData(
       [...statusMap.entries()]
