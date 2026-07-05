@@ -1,13 +1,13 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
   PlusCircle, Pencil, Trash2, Upload, Download,
-  Loader2, X, Check, ChevronDown, Package,
+  Loader2, X, Check, Package,
 } from "lucide-react";
+import SortableTable from "@/app/components/SortableTable";
 
 type PackageType = "مكالمات" | "نت" | "خدمة";
 type ModalMode = "add" | "edit" | null;
@@ -35,19 +35,15 @@ export default function PackagesPage() {
   const [providers, setProviders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // فلاتر
   const [filterProvider, setFilterProvider] = useState("");
   const [filterType, setFilterType] = useState("");
 
-  // Modal إضافة/تعديل
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  // Import
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importType, setImportType] = useState<PackageType>("مكالمات");
   const [importing, setImporting] = useState(false);
   const [importMode, setImportMode] = useState<"add" | "update">("add");
   const [importProgress, setImportProgress] = useState(0);
@@ -65,28 +61,24 @@ export default function PackagesPage() {
   const canEdit = isSuperAdmin || isAdmin;
 
   // ─── Load ─────────────────────────────────────────────────
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      const [{ data: p }, { data: calls }, { data: internet }, { data: ext }] = await Promise.all([
-        supabase.from("providers").select("*"),
-        supabase.from("calls_packages").select("*, providers(name)"),
-        supabase.from("internet_packages").select("*, providers(name)"),
-        supabase.from("line_extensions").select("*, providers(name)"),
-      ]);
+  async function loadPackages() {
+    setLoading(true);
+    const [{ data: p }, { data: calls }, { data: internet }, { data: ext }] = await Promise.all([
+      supabase.from("providers").select("*"),
+      supabase.from("calls_packages").select("*, providers(name)"),
+      supabase.from("internet_packages").select("*, providers(name)"),
+      supabase.from("line_extensions").select("*, providers(name)"),
+    ]);
+    setProviders(p || []);
+    setPackages([
+      ...(calls || []).map((x) => ({ ...x, _type: "مكالمات" as PackageType, _name: x.package_name, _table: "calls_packages", _provider_name: x.providers?.name })),
+      ...(internet || []).map((x) => ({ ...x, _type: "نت" as PackageType, _name: x.package_name, _table: "internet_packages", _provider_name: x.providers?.name })),
+      ...(ext || []).map((x) => ({ ...x, _type: "خدمة" as PackageType, _name: x.extension_name, _table: "line_extensions", _provider_name: x.providers?.name })),
+    ]);
+    setLoading(false);
+  }
 
-      setProviders(p || []);
-
-      const all = [
-        ...(calls || []).map((x) => ({ ...x, _type: "مكالمات" as PackageType, _name: x.package_name, _table: "calls_packages", _provider_name: x.providers?.name })),
-        ...(internet || []).map((x) => ({ ...x, _type: "نت" as PackageType, _name: x.package_name, _table: "internet_packages", _provider_name: x.providers?.name })),
-        ...(ext || []).map((x) => ({ ...x, _type: "خدمة" as PackageType, _name: x.extension_name, _table: "line_extensions", _provider_name: x.providers?.name })),
-      ];
-      setPackages(all);
-      setLoading(false);
-    }
-    load();
-  }, []);
+  useEffect(() => { loadPackages(); }, []);
 
   // ─── Filter ───────────────────────────────────────────────
   const filtered = packages.filter((x) => {
@@ -118,7 +110,6 @@ export default function PackagesPage() {
       alert("الشبكة والاسم والسعر مطلوبين"); return;
     }
     setSaving(true);
-
     const table = TABLE_MAP[form.type];
     const nameField = NAME_FIELD[form.type];
     const payload = {
@@ -126,7 +117,6 @@ export default function PackagesPage() {
       [nameField]: form.name.trim(),
       price: Number(form.price),
     };
-
     if (modalMode === "add") {
       const { error } = await supabase.from(table).insert(payload);
       if (error) { alert(error.message); setSaving(false); return; }
@@ -134,20 +124,9 @@ export default function PackagesPage() {
       const { error } = await supabase.from(editingItem._table).update(payload).eq("id", editingItem.id);
       if (error) { alert(error.message); setSaving(false); return; }
     }
-
     setSaving(false);
     setModalMode(null);
-    // reload
-    const [{ data: calls }, { data: internet }, { data: ext }] = await Promise.all([
-      supabase.from("calls_packages").select("*, providers(name)"),
-      supabase.from("internet_packages").select("*, providers(name)"),
-      supabase.from("line_extensions").select("*, providers(name)"),
-    ]);
-    setPackages([
-      ...(calls || []).map((x) => ({ ...x, _type: "مكالمات" as PackageType, _name: x.package_name, _table: "calls_packages", _provider_name: x.providers?.name })),
-      ...(internet || []).map((x) => ({ ...x, _type: "نت" as PackageType, _name: x.package_name, _table: "internet_packages", _provider_name: x.providers?.name })),
-      ...(ext || []).map((x) => ({ ...x, _type: "خدمة" as PackageType, _name: x.extension_name, _table: "line_extensions", _provider_name: x.providers?.name })),
-    ]);
+    loadPackages();
   }
 
   async function deletePackage(item: any) {
@@ -169,50 +148,90 @@ export default function PackagesPage() {
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[];
 
-      const table = TABLE_MAP[importType];
-      const nameField = NAME_FIELD[importType];
-
-      const records = rows
-        .filter((r) => r["name"] || r[nameField])
-        .map((r) => ({
-          provider_id: Number(r["provider_id"]),
-          [nameField]: String(r["name"] || r[nameField] || "").trim(),
-          price: Number(r["price"] || 0),
-        }));
+      const providerMap = new Map(providers.map((p) => [p.name.toLowerCase().trim(), p.id]));
 
       if (importMode === "add") {
-        // إضافة مجمعة
-        for (let i = 0; i < records.length; i += 100) {
-          const batch = records.slice(i, i + 100);
-          const { error } = await supabase.from(table).insert(batch);
+        // ─── إضافة مجمعة — بيوزع على الجداول حسب type ────────
+        const callsRecords: any[] = [];
+        const internetRecords: any[] = [];
+        const extensionRecords: any[] = [];
+
+        for (const r of rows) {
+          if (!r["name"]) continue;
+          const providerId = providerMap.get(String(r["provider"] || "").toLowerCase().trim());
+          if (!providerId) throw new Error(`الشبكة "${r["provider"]}" غير موجودة — استخدمي الاسم الإنجليزي`);
+
+          const type = String(r["type"] || "").trim();
+          const name = String(r["name"] || "").trim();
+          const price = Number(r["price"] || 0);
+
+          if (type === "مكالمات") {
+            callsRecords.push({ provider_id: providerId, package_name: name, price });
+          } else if (type === "نت") {
+            internetRecords.push({ provider_id: providerId, package_name: name, price });
+          } else if (type === "خدمة") {
+            extensionRecords.push({ provider_id: providerId, extension_name: name, price });
+          } else {
+            throw new Error(`نوع غير معروف "${type}" في السطر — استخدمي: مكالمات / نت / خدمة`);
+          }
+        }
+
+        setImportProgress(30);
+
+        if (callsRecords.length > 0) {
+          const { error } = await supabase.from("calls_packages").insert(callsRecords);
           if (error) throw new Error(error.message);
-          setImportProgress(Math.round((Math.min(i + 100, records.length) / records.length) * 100));
         }
-        setImportResult({ status: "success", message: `تم إضافة ${records.length} باقة بنجاح` });
+        setImportProgress(55);
+
+        if (internetRecords.length > 0) {
+          const { error } = await supabase.from("internet_packages").insert(internetRecords);
+          if (error) throw new Error(error.message);
+        }
+        setImportProgress(80);
+
+        if (extensionRecords.length > 0) {
+          const { error } = await supabase.from("line_extensions").insert(extensionRecords);
+          if (error) throw new Error(error.message);
+        }
+        setImportProgress(100);
+
+        setImportResult({
+          status: "success",
+          message: `تم إضافة: ${callsRecords.length} مكالمات + ${internetRecords.length} نت + ${extensionRecords.length} خدمة`,
+        });
+
       } else {
-        // تغيير مجمع — بيتطابق على provider_id + name
-        for (let i = 0; i < records.length; i++) {
-          const r = records[i];
-          await supabase.from(table)
-            .update({ price: r.price })
-            .eq("provider_id", r.provider_id)
-            .eq(nameField, r[nameField]);
-          setImportProgress(Math.round(((i + 1) / records.length) * 100));
+        // ─── تحديث مجمع للسعر ─────────────────────────────────
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          if (!r["name"]) continue;
+
+          const providerId = providerMap.get(String(r["provider"] || "").toLowerCase().trim());
+          if (!providerId) throw new Error(`الشبكة "${r["provider"]}" غير موجودة`);
+
+          const type = String(r["type"] || "").trim();
+          const name = String(r["name"] || "").trim();
+          const price = Number(r["price"] || 0);
+
+          if (type === "مكالمات") {
+            await supabase.from("calls_packages").update({ price }).eq("provider_id", providerId).eq("package_name", name);
+          } else if (type === "نت") {
+            await supabase.from("internet_packages").update({ price }).eq("provider_id", providerId).eq("package_name", name);
+          } else if (type === "خدمة") {
+            await supabase.from("line_extensions").update({ price }).eq("provider_id", providerId).eq("extension_name", name);
+          }
+
+          setImportProgress(Math.round(((i + 1) / rows.length) * 100));
         }
-        setImportResult({ status: "success", message: `تم تحديث ${records.length} باقة بنجاح` });
+
+        setImportResult({
+          status: "success",
+          message: `تم تحديث ${rows.length} باقة بنجاح`,
+        });
       }
 
-      // reload
-      const [{ data: calls }, { data: internet }, { data: ext }] = await Promise.all([
-        supabase.from("calls_packages").select("*, providers(name)"),
-        supabase.from("internet_packages").select("*, providers(name)"),
-        supabase.from("line_extensions").select("*, providers(name)"),
-      ]);
-      setPackages([
-        ...(calls || []).map((x) => ({ ...x, _type: "مكالمات" as PackageType, _name: x.package_name, _table: "calls_packages", _provider_name: x.providers?.name })),
-        ...(internet || []).map((x) => ({ ...x, _type: "نت" as PackageType, _name: x.package_name, _table: "internet_packages", _provider_name: x.providers?.name })),
-        ...(ext || []).map((x) => ({ ...x, _type: "خدمة" as PackageType, _name: x.extension_name, _table: "line_extensions", _provider_name: x.providers?.name })),
-      ]);
+      loadPackages();
     } catch (err) {
       setImportResult({ status: "error", message: err instanceof Error ? err.message : "خطأ غير متوقع" });
     } finally {
@@ -221,12 +240,13 @@ export default function PackagesPage() {
     }
   }
 
+  // ─── Template ─────────────────────────────────────────────
   function downloadTemplate() {
-    const ws = XLSX.utils.json_to_sheet([{
-      provider_id: 1,
-      name: "اسم الباقة",
-      price: 100,
-    }]);
+    const ws = XLSX.utils.json_to_sheet([
+      { provider: "etisalat", type: "مكالمات", name: "اسم باقة مكالمات", price: 100 },
+      { provider: "orange", type: "نت", name: "اسم باقة نت", price: 80 },
+      { provider: "vodafone", type: "خدمة", name: "اسم خدمة", price: 50 },
+    ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Packages");
     XLSX.writeFile(wb, "packages-template.xlsx");
@@ -269,35 +289,26 @@ export default function PackagesPage() {
           </div>
         )}
 
-        {/* Import section */}
+        {/* Import */}
         {canEdit && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-5">
             <p className="text-sm font-semibold text-slate-700 mb-3">استيراد مجمع من Excel</p>
-            <div className="grid md:grid-cols-4 gap-3 mb-3">
-              {/* نوع الباقة */}
-              <select value={importType} onChange={(e) => setImportType(e.target.value as PackageType)}
-                className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 bg-slate-50">
-                <option value="مكالمات">باقات المكالمات</option>
-                <option value="نت">باقات الإنترنت</option>
-                <option value="خدمة">الخدمات</option>
-              </select>
-
-              {/* نوع العملية */}
+            <div className="grid md:grid-cols-3 gap-3 mb-3">
               <select value={importMode} onChange={(e) => setImportMode(e.target.value as "add" | "update")}
                 className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 bg-slate-50">
                 <option value="add">إضافة مجمعة</option>
-                <option value="update">تغيير مجمع (تحديث سعر)</option>
+                <option value="update">تحديث أسعار</option>
               </select>
 
-              {/* ملف */}
-              <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-3 py-2.5 cursor-pointer text-sm transition ${importFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-blue-300 text-slate-400"}`}>
+              <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-3 py-2.5 cursor-pointer text-sm transition ${
+                importFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-blue-300 text-slate-400"
+              }`}>
                 <Upload className="w-4 h-4 shrink-0" />
                 <span className="truncate">{importFile ? importFile.name : "اختر ملف .xlsx"}</span>
                 <input type="file" accept=".xlsx,.xls" className="hidden"
                   onChange={(e) => { setImportFile(e.target.files?.[0] ?? null); setImportResult(null); }} />
               </label>
 
-              {/* زرار */}
               <button onClick={runImport} disabled={importing || !importFile}
                 className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-medium text-sm transition">
                 {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
@@ -305,7 +316,6 @@ export default function PackagesPage() {
               </button>
             </div>
 
-            {/* Progress */}
             {importing && (
               <div className="mb-3">
                 <div className="flex justify-between text-xs text-slate-500 mb-1">
@@ -319,17 +329,20 @@ export default function PackagesPage() {
               </div>
             )}
 
-            {/* Result */}
             {importResult && (
-              <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${importResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+              <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${
+                importResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+              }`}>
                 {importResult.status === "success" ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                 {importResult.message}
               </div>
             )}
 
-            <p className="text-xs text-slate-400 mt-2">
-              الأعمدة: <strong>provider_id</strong> + <strong>name</strong> + <strong>price</strong>
-            </p>
+            <div className="mt-2 text-xs text-slate-400 space-y-1">
+              <p>الأعمدة: <span className="font-mono">provider</span> + <span className="font-mono">type</span> + <span className="font-mono">name</span> + <span className="font-mono">price</span></p>
+              <p>الـ provider: <span className="font-mono">etisalat / orange / vodafone</span></p>
+              <p>الـ type: <span className="font-mono">مكالمات / نت / خدمة</span></p>
+            </div>
           </div>
         )}
 
@@ -359,59 +372,35 @@ export default function PackagesPage() {
             <Loader2 className="w-5 h-5 animate-spin" /> جاري التحميل...
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="p-3 text-right font-medium">الشبكة</th>
-                  <th className="p-3 text-right font-medium">النوع</th>
-                  <th className="p-3 text-right font-medium">اسم الباقة</th>
-                  <th className="p-3 text-right font-medium">السعر</th>
-                  {canEdit && <th className="p-3 text-center font-medium">إجراءات</th>}
-                </tr>
-              </thead>
-              <tbody className="text-slate-700">
-                {filtered.map((item) => (
-                  <tr key={`${item._table}-${item.id}`}
-                    className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                    <td className="p-3 font-medium">{item._provider_name || item.provider_id}</td>
-                    <td className="p-3">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${typeColors[item._type]}`}>
-                        {item._type}
-                      </span>
-                    </td>
-                    <td className="p-3">{item._name}</td>
-                    <td className="p-3 font-semibold">{item.price}</td>
-                    {canEdit && (
-                      <td className="p-3">
-                        <div className="flex gap-2 justify-center">
-                          <button onClick={() => openEdit(item)}
-                            className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          {isSuperAdmin && (
-                            <button onClick={() => deletePackage(item)}
-                              className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="p-10 text-center text-slate-400">لا توجد باقات</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div>
+            <SortableTable
+              columns={[
+                { label: "الشبكة", render: (r) => r._provider_name || r.provider_id },
+                { label: "النوع", render: (r) => <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${typeColors[r._type]}`}>{r._type}</span> },
+                { label: "اسم الباقة", key: "_name" },
+                { label: "السعر", key: "price", className: "font-semibold" },
+              ]}
+              data={filtered}
+              actions={(item) => (
+                <>
+                  <button onClick={() => openEdit(item)}
+                    className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  {isSuperAdmin && (
+                    <button onClick={() => deletePackage(item)}
+                      className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
+              )}
+            />
           </div>
         )}
       </div>
 
-      {/* Modal إضافة/تعديل */}
+      {/* Modal */}
       {modalMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
@@ -423,12 +412,11 @@ export default function PackagesPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <div className="space-y-4">
-              {/* النوع */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">نوع الباقة</label>
-                <select value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value as PackageType }))}
+                <select value={form.type}
+                  onChange={(e) => setForm((p) => ({ ...p, type: e.target.value as PackageType }))}
                   disabled={modalMode === "edit"}
                   className="w-full border border-slate-200 bg-slate-50 px-3 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60">
                   <option value="مكالمات">باقة مكالمات</option>
@@ -436,11 +424,10 @@ export default function PackagesPage() {
                   <option value="خدمة">خدمة</option>
                 </select>
               </div>
-
-              {/* الشبكة */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">الشبكة</label>
-                <select value={form.provider_id} onChange={(e) => setForm((p) => ({ ...p, provider_id: e.target.value }))}
+                <select value={form.provider_id}
+                  onChange={(e) => setForm((p) => ({ ...p, provider_id: e.target.value }))}
                   className="w-full border border-slate-200 bg-slate-50 px-3 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-200">
                   <option value="">اختر الشبكة</option>
                   {providers.map((p) => (
@@ -448,24 +435,21 @@ export default function PackagesPage() {
                   ))}
                 </select>
               </div>
-
-              {/* الاسم */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">اسم الباقة</label>
-                <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                <input value={form.name}
+                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
                   placeholder="اسم الباقة"
                   className="w-full border border-slate-200 bg-slate-50 px-3 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
               </div>
-
-              {/* السعر */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">السعر</label>
-                <input type="number" value={form.price} onChange={(e) => setForm((p) => ({ ...p, price: e.target.value }))}
+                <input type="number" value={form.price}
+                  onChange={(e) => setForm((p) => ({ ...p, price: e.target.value }))}
                   placeholder="السعر"
                   className="w-full border border-slate-200 bg-slate-50 px-3 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
               </div>
             </div>
-
             <div className="flex gap-3 mt-6">
               <button onClick={savePackage} disabled={saving}
                 className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-3 rounded-xl font-medium text-sm transition">

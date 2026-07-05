@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import {
   Pencil, ArrowRight, User, Network, Package, Tag,
   StickyNote, Loader2, Hash, Calendar, Plug, Briefcase,
   Building2, ListTree, Banknote, History, Save,
-  ScanLine, ImagePlus, Upload, CreditCard,
+  ScanLine, ImagePlus, Upload, CreditCard, X,
+  CheckCircle2, AlertCircle, Search, ChevronDown,
 } from "lucide-react";
 
 function SectionTitle({ title, icon: Icon }: { title: string; icon: React.ElementType }) {
@@ -34,11 +35,104 @@ function FieldWrap({ label, icon: Icon, children }: {
   );
 }
 
+// ─── Searchable Select ────────────────────────────────────────
+function SearchableSelect({
+  value, onChange, options, placeholder, disabled = false,
+  getLabel, getValue,
+}: {
+  value: string | number;
+  onChange: (val: string) => void;
+  options: any[];
+  placeholder: string;
+  disabled?: boolean;
+  getLabel: (item: any) => string;
+  getValue: (item: any) => string | number;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selectedItem = options.find((o) => String(getValue(o)) === String(value));
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const filtered = search.trim()
+    ? options.filter((o) => getLabel(o).toLowerCase().includes(search.toLowerCase()))
+    : options;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => { if (!disabled) setOpen(!open); }}
+        className={`w-full flex items-center justify-between border rounded-xl px-3 py-3 text-sm transition ${
+          disabled
+            ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
+            : "bg-white border-slate-200 text-slate-900 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
+        }`}
+      >
+        <span className={selectedItem ? "text-slate-900" : "text-slate-400"}>
+          {selectedItem ? getLabel(selectedItem) : placeholder}
+        </span>
+        <div className="flex items-center gap-1">
+          {value && !disabled && (
+            <span onClick={(e) => { e.stopPropagation(); onChange(""); setSearch(""); }}
+              className="text-slate-400 hover:text-slate-600 p-0.5">
+              <X className="w-3.5 h-3.5" />
+            </span>
+          )}
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+
+      {open && (
+        <div className="absolute z-30 w-full bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-56 flex flex-col">
+          <div className="p-2 border-b border-slate-100">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="بحث..."
+                autoFocus
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pr-8 pl-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-200"
+              />
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filtered.length > 0 ? (
+              filtered.map((item) => (
+                <button key={getValue(item)} type="button"
+                  onClick={() => { onChange(String(getValue(item))); setSearch(""); setOpen(false); }}
+                  className={`w-full text-right px-3 py-2 text-sm hover:bg-slate-50 transition ${
+                    String(getValue(item)) === String(value) ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-700"
+                  }`}>
+                  {getLabel(item)}
+                </button>
+              ))
+            ) : (
+              <p className="px-3 py-3 text-xs text-slate-400 text-center">مش لاقي نتايج</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const inputClass = "w-full border border-slate-200 bg-white text-slate-900 p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm";
 const readonlyClass = "w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm cursor-not-allowed";
 
 export default function EditLine({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [line, setLine] = useState<any>(null);
   const [id, setId] = useState("");
   const [originalLine, setOriginalLine] = useState<any>(null);
@@ -57,42 +151,63 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   const [departmentName, setDepartmentName] = useState("");
   const [groupName, setGroupName] = useState("");
 
+  function showToast(message: string, type: "success" | "error") {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  }
+
   // ─── Init ─────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
       const p = await params;
       setId(p.id);
-      const { data } = await supabase.from("lines").select("*").eq("id", p.id).single();
+
+      const { data } = await supabase
+        .from("lines")
+        .select("*, clients(id, name)")
+        .eq("id", p.id)
+        .single();
+
       if (data) {
         setLine(data);
         setOriginalLine(data);
         await loadHistory(p.id);
         if (data.provider_id) await loadPackagesStatusesAccounts(data.provider_id);
         if (data.almanafiz_id) await loadAlmanafizDetails(data.almanafiz_id);
+        // أضيفي العميل الحالي في القائمة
+        if (data.clients) {
+          setClientsList([data.clients]);
+        }
       }
-     
-console.log(data);
     }
     init();
   }, [params]);
- 
 
   // ─── Load lookups ─────────────────────────────────────────
   useEffect(() => {
     async function loadLookups() {
-      const [{ data: p }, { data: a }, { data: ag }, { data: cl }] = await Promise.all([
+      const [{ data: p }, { data: a }, { data: ag }] = await Promise.all([
         supabase.from("providers").select("*"),
         supabase.from("almanafiz").select("*, groups(id, name, departments(id, name))"),
         supabase.from("agents").select("*").eq("is_active", true),
-        supabase.from("clients").select("id, name, national_id").order("name"),
       ]);
       setProviders(p || []);
       setAlmanafizList(a || []);
       setAgentsList(ag || []);
-      setClientsList(cl || []);
     }
     loadLookups();
   }, []);
+
+  // ─── Search clients ───────────────────────────────────────
+  async function searchClients(query: string) {
+    if (!query.trim()) return;
+    const { data } = await supabase
+      .from("clients")
+      .select("id, name, national_id")
+      .or(`name.ilike.%${query}%,national_id.ilike.%${query}%`)
+      .limit(20);
+    setClientsList(data || []);
+  }
 
   // ─── Auto total ───────────────────────────────────────────
   useEffect(() => {
@@ -164,26 +279,20 @@ console.log(data);
     }));
   }
 
-  // ─── Load history من audit_logs ───────────────────────────
-async function loadHistory(lineId: string) {
-  console.log("lineId =", lineId);
+  // ─── Load history ─────────────────────────────────────────
+  async function loadHistory(lineId: string) {
+    const { data } = await supabase
+      .from("audit_logs")
+      .select("*")
+      .eq("table_name", "lines")
+      .eq("record_id", String(lineId))
+      .order("created_at", { ascending: false });
 
-  const { data, error } = await supabase
-    .from("audit_logs")
-    .select("*")
-    .eq("table_name", "lines")
-    .order("created_at", { ascending: false });
-
-  console.log("all audit_logs =", data);
-  console.log("error =", error);
-
-  const filtered = (data || []).filter(
-    (item) => String(item.record_id) === String(lineId)
-  );
-
-  console.log("filtered =", filtered);
-  setHistoryList(filtered);
-}
+    const filtered = (data || []).filter(
+      (item) => String(item.record_id) === String(lineId)
+    );
+    setHistoryList(filtered);
+  }
 
   // ─── Save ─────────────────────────────────────────────────
   async function save() {
@@ -250,7 +359,6 @@ async function loadHistory(lineId: string) {
     if (originalLine.report_note !== line.report_note)
       changes.report_note = { old: originalLine.report_note || "—", new: line.report_note || "—" };
 
-    // audit_logs
     if (Object.keys(changes).length > 0) {
       await supabase.from("audit_logs").insert({
         user_name: localStorage.getItem("full_name") || "Unknown",
@@ -261,7 +369,6 @@ async function loadHistory(lineId: string) {
       });
     }
 
-    // update lines
     const { error } = await supabase.from("lines").update({
       customer_date_real: line.customer_date_real,
       serial_number: line.serial_number,
@@ -285,21 +392,37 @@ async function loadHistory(lineId: string) {
       total_price:            Number(line.total_price || 0),
     }).eq("id", id);
 
-    if (error) { alert(error.message); return; }
+    if (error) { showToast(error.message, "error"); return; }
 
-    alert("تم حفظ التعديلات");
+    showToast("تم حفظ التعديلات ✅", "success");
     await loadHistory(id);
     setOriginalLine(line);
   }
 
   if (!line) return (
     <div dir="rtl" className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">
-      جاري التحميل...
+      <Loader2 className="w-5 h-5 animate-spin ml-2" /> جاري التحميل...
     </div>
   );
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-6 md:p-8">
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-xl text-sm font-medium ${
+          toast.type === "success" ? "bg-green-600 text-white" : "bg-red-600 text-white"
+        }`}>
+          {toast.type === "success"
+            ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+            : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {toast.message}
+          <button onClick={() => setToast(null)} className="opacity-70 hover:opacity-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <div className="max-w-5xl mx-auto">
 
         {/* Header */}
@@ -327,13 +450,14 @@ async function loadHistory(lineId: string) {
               <input readOnly value={line.number} className={readonlyClass} />
             </FieldWrap>
             <FieldWrap label="المنفذ" icon={Plug}>
-              <select className={inputClass} value={line.almanafiz_id || ""}
-                onChange={(e) => handleAlmanafizChange(e.target.value)}>
-                <option value="">اختر المنفذ</option>
-                {almanafizList.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.almanafiz_id || ""}
+                onChange={(val) => handleAlmanafizChange(val)}
+                options={almanafizList}
+                placeholder="اختر المنفذ"
+                getLabel={(item) => item.name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="سيريال نمبر" icon={ScanLine}>
               <input className={inputClass} value={line.serial_number || ""}
@@ -359,14 +483,18 @@ async function loadHistory(lineId: string) {
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
           <SectionTitle title="العميل" icon={User} />
           <FieldWrap label="اسم العميل" icon={User}>
-            <select className={inputClass} value={line.client_id || ""}
-              onChange={(e) => setLine({ ...line, client_id: e.target.value })}>
-              <option value="">اختر العميل</option>
-              {clientsList.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={line.client_id || ""}
+              onChange={(val) => setLine({ ...line, client_id: val })}
+              options={clientsList}
+              placeholder="ابحث باسم العميل أو الرقم القومي..."
+              getLabel={(item) => item.name}
+              getValue={(item) => item.id}
+            />
+         
           </FieldWrap>
+
+        
         </div>
 
         {/* بيانات الشبكة */}
@@ -374,25 +502,25 @@ async function loadHistory(lineId: string) {
           <SectionTitle title="بيانات الشبكة" icon={Network} />
           <div className="grid md:grid-cols-2 gap-4">
             <FieldWrap label="الشبكة" icon={Network}>
-              <select className={inputClass} value={line.provider_id || ""}
-                onChange={(e) => handleProviderChange(e.target.value)}>
-                <option value="">اختر الشبكة</option>
-                {providers.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.provider_id || ""}
+                onChange={(val) => handleProviderChange(val)}
+                options={providers}
+                placeholder="اختر الشبكة"
+                getLabel={(item) => item.name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="الأكونت" icon={CreditCard}>
-              <select className={inputClass} value={line.account_id || ""}
+              <SearchableSelect
+                value={line.account_id || ""}
+                onChange={(val) => setLine({ ...line, account_id: val })}
+                options={accountsList}
+                placeholder={line.provider_id ? "اختر الأكونت" : "اختر الشبكة أولاً"}
                 disabled={!line.provider_id}
-                onChange={(e) => setLine({ ...line, account_id: e.target.value })}>
-                <option value="">{line.provider_id ? "اختر الأكونت" : "اختر الشبكة أولاً"}</option>
-                {accountsList.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.account_no}{a.account_name ? ` — ${a.account_name}` : ""}
-                  </option>
-                ))}
-              </select>
+                getLabel={(item) => `${item.account_no}${item.account_name ? ` — ${item.account_name}` : ""}`}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="القسم" icon={Building2}>
               <input readOnly className={readonlyClass} value={departmentName} placeholder="يتعبأ أوتوماتيك" />
@@ -401,23 +529,25 @@ async function loadHistory(lineId: string) {
               <input readOnly className={readonlyClass} value={groupName} placeholder="يتعبأ أوتوماتيك" />
             </FieldWrap>
             <FieldWrap label="المندوب" icon={Briefcase}>
-              <select className={inputClass} value={line.agent_id || ""}
-                onChange={(e) => setLine({ ...line, agent_id: e.target.value })}>
-                <option value="">اختر المندوب</option>
-                {agentsList.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.agent_id || ""}
+                onChange={(val) => setLine({ ...line, agent_id: val })}
+                options={agentsList}
+                placeholder="اختر المندوب"
+                getLabel={(item) => item.name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="حالة الخط" icon={Tag}>
-              <select className={inputClass} value={line.line_status_id || ""}
+              <SearchableSelect
+                value={line.line_status_id || ""}
+                onChange={(val) => setLine({ ...line, line_status_id: val })}
+                options={lineStatuses}
+                placeholder={line.provider_id ? "اختر حالة الخط" : "اختر الشبكة أولاً"}
                 disabled={!line.provider_id}
-                onChange={(e) => setLine({ ...line, line_status_id: e.target.value })}>
-                <option value="">{line.provider_id ? "اختر حالة الخط" : "اختر الشبكة أولاً"}</option>
-                {lineStatuses.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                getLabel={(item) => item.name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
           </div>
         </div>
@@ -427,48 +557,51 @@ async function loadHistory(lineId: string) {
           <SectionTitle title="الباقات والخدمات" icon={Package} />
           <div className="grid md:grid-cols-2 gap-4">
             <FieldWrap label="باقة المكالمات" icon={Package}>
-              <select className={inputClass} value={line.calls_package_id || ""}
-                onChange={(e) => {
-                  const selected = callsPackages.find((x) => x.id === Number(e.target.value));
-                  setLine({ ...line, calls_package_id: Number(e.target.value), calls_package_price: selected?.price || 0 });
-                }}>
-                <option value="">باقة المكالمات</option>
-                {callsPackages.map((item) => (
-                  <option key={item.id} value={item.id}>{item.package_name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.calls_package_id || ""}
+                onChange={(val) => {
+                  const selected = callsPackages.find((x) => x.id === Number(val));
+                  setLine({ ...line, calls_package_id: Number(val), calls_package_price: selected?.price || 0 });
+                }}
+                options={callsPackages}
+                placeholder="باقة المكالمات"
+                getLabel={(item) => item.package_name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="سعر باقة المكالمات" icon={Banknote}>
               <input className={inputClass} value={line.calls_package_price || ""}
                 onChange={(e) => setLine({ ...line, calls_package_price: e.target.value })} />
             </FieldWrap>
             <FieldWrap label="باقة الإنترنت" icon={Package}>
-              <select className={inputClass} value={line.internet_package_id || ""}
-                onChange={(e) => {
-                  const selected = internetPackages.find((x) => x.id === Number(e.target.value));
-                  setLine({ ...line, internet_package_id: Number(e.target.value), internet_package_price: selected?.price || 0 });
-                }}>
-                <option value="">باقة الإنترنت</option>
-                {internetPackages.map((item) => (
-                  <option key={item.id} value={item.id}>{item.package_name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.internet_package_id || ""}
+                onChange={(val) => {
+                  const selected = internetPackages.find((x) => x.id === Number(val));
+                  setLine({ ...line, internet_package_id: Number(val), internet_package_price: selected?.price || 0 });
+                }}
+                options={internetPackages}
+                placeholder="باقة الإنترنت"
+                getLabel={(item) => item.package_name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="سعر باقة الإنترنت" icon={Banknote}>
               <input className={inputClass} value={line.internet_package_price || ""}
                 onChange={(e) => setLine({ ...line, internet_package_price: e.target.value })} />
             </FieldWrap>
             <FieldWrap label="الإضافة" icon={Package}>
-              <select className={inputClass} value={line.line_extension_id || ""}
-                onChange={(e) => {
-                  const selected = services.find((x) => x.id === Number(e.target.value));
-                  setLine({ ...line, line_extension_id: Number(e.target.value), line_extension_price: selected?.price || 0 });
-                }}>
-                <option value="">الإضافة</option>
-                {services.map((item) => (
-                  <option key={item.id} value={item.id}>{item.extension_name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={line.line_extension_id || ""}
+                onChange={(val) => {
+                  const selected = services.find((x) => x.id === Number(val));
+                  setLine({ ...line, line_extension_id: Number(val), line_extension_price: selected?.price || 0 });
+                }}
+                options={services}
+                placeholder="الإضافة"
+                getLabel={(item) => item.extension_name}
+                getValue={(item) => item.id}
+              />
             </FieldWrap>
             <FieldWrap label="سعر الإضافة" icon={Banknote}>
               <input className={inputClass} value={line.line_extension_price || ""}
@@ -533,8 +666,6 @@ async function loadHistory(lineId: string) {
           <div className="space-y-3">
             {historyList.map((item) => (
               <div key={item.id} className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
-
-                {/* Header */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">
@@ -542,13 +673,9 @@ async function loadHistory(lineId: string) {
                     </span>
                     <span className="text-sm font-bold text-slate-700">{item.user_name || "—"}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                      item.action_type === "DELETE"
-                        ? "bg-red-50 text-red-700"
-                        : "bg-blue-50 text-blue-700"
+                      item.action_type === "DELETE" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"
                     }`}>
-                      {item.action_type === "UPDATE" ? "تعديل"
-                        : item.action_type === "DELETE" ? "حذف"
-                        : item.action_type}
+                      {item.action_type === "UPDATE" ? "تعديل" : item.action_type === "DELETE" ? "حذف" : item.action_type}
                     </span>
                   </div>
                   <span className="text-xs text-slate-400">
@@ -556,30 +683,25 @@ async function loadHistory(lineId: string) {
                   </span>
                 </div>
 
-                {/* التغييرات */}
-                {item.old_data && (
-  <div className="space-y-1.5">
-    <p className="text-xs text-slate-400 font-medium mb-1">التغييرات:</p>
-    {Object.entries(
-      typeof item.old_data === "string"
-        ? JSON.parse(item.old_data)
-        : item.old_data
-    ).map(([key, val]: any) => (
-      <div key={key}
-        className="flex items-center gap-2 text-xs bg-white rounded-lg border border-slate-100 px-2.5 py-2">
-        <span className="text-slate-400 shrink-0 min-w-fit">{key}:</span>
-        <span className="text-red-400 line-through">{String(val.old ?? "—")}</span>
-        <span className="text-slate-300">←</span>
-        <span className="text-green-600 font-medium">{String(val.new ?? "—")}</span>
-      </div>
-    ))}
-  </div>
-)}
+                {item.old_data && Object.keys(item.old_data).length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-slate-400 font-medium mb-1">التغييرات:</p>
+                    {Object.entries(
+                      typeof item.old_data === "string" ? JSON.parse(item.old_data) : item.old_data
+                    ).map(([key, val]: any) => (
+                      <div key={key} className="flex items-center gap-2 text-xs bg-white rounded-lg border border-slate-100 px-2.5 py-2">
+                        <span className="text-slate-400 shrink-0 min-w-fit">{key}:</span>
+                        <span className="text-red-400 line-through">{String(val.old ?? "—")}</span>
+                        <span className="text-slate-300">←</span>
+                        <span className="text-green-600 font-medium">{String(val.new ?? "—")}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </div>
-
       </div>
     </div>
   );

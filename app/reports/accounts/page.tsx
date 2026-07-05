@@ -9,6 +9,7 @@ import {
   Download, Upload, X, Check, ChevronLeft, ChevronRight,
   Network, Hash, FileSpreadsheet, BarChart2,
 } from "lucide-react";
+import SortableTable from "@/app/components/SortableTable";
 
 interface Account {
   id: number;
@@ -29,6 +30,7 @@ const PROVIDER_COLORS: Record<string, { bg: string; text: string; border: string
   "فودافون": { bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
 };
 const DEFAULT_COLOR = { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" };
+
 function getProviderColor(name: string) {
   return PROVIDER_COLORS[name] || DEFAULT_COLOR;
 }
@@ -98,16 +100,29 @@ export default function AccountsPage() {
     if (error) { setLoading(false); return; }
 
     const accountIds = (data || []).map((a) => a.id);
-    const { data: linesData } = await supabase
-      .from("lines")
-      .select("account_id")
-      .in("account_id", accountIds)
-      .or("is_deleted.is.null,is_deleted.eq.false");
 
+    // جيبي عدد الخطوط لكل أكونت
     const countMap = new Map<number, number>();
-    (linesData || []).forEach((l) => {
-      if (l.account_id) countMap.set(l.account_id, (countMap.get(l.account_id) || 0) + 1);
-    });
+    if (accountIds.length > 0) {
+      let offset = 0;
+      const batchSize = 1000;
+      while (true) {
+        const { data: linesData } = await supabase
+          .from("lines")
+          .select("account_id")
+          .in("account_id", accountIds)
+          .or("is_deleted.is.null,is_deleted.eq.false")
+          .range(offset, offset + batchSize - 1);
+
+        (linesData || []).forEach((l) => {
+          if (l.account_id)
+            countMap.set(l.account_id, (countMap.get(l.account_id) || 0) + 1);
+        });
+
+        if (!linesData || linesData.length < batchSize) break;
+        offset += batchSize;
+      }
+    }
 
     setAccounts((data || []).map((a) => ({ ...a, _lines_count: countMap.get(a.id) || 0 })));
     setTotal(count || 0);
@@ -116,15 +131,36 @@ export default function AccountsPage() {
 
   // ─── Load dashboard ───────────────────────────────────────
   async function loadDashStats() {
-    const [{ data: allAccounts }, { data: allLines }] = await Promise.all([
-      supabase.from("accounts").select("id, account_no, account_name, provider_id, providers(name)"),
-      supabase.from("lines").select("account_id").or("is_deleted.is.null,is_deleted.eq.false"),
-    ]);
+    const { data: allAccounts } = await supabase
+      .from("accounts")
+      .select("id, account_no, account_name, provider_id, providers(name)");
 
+    // إجمالي الخطوط الفعلي
+    const { count: totalLinesCount } = await supabase
+      .from("lines")
+      .select("*", { count: "exact", head: true })
+      .or("is_deleted.is.null,is_deleted.eq.false");
+
+    // عدد الخطوط لكل أكونت — بنجيبها في batches
     const lineCountMap = new Map<number, number>();
-    (allLines || []).forEach((l) => {
-      if (l.account_id) lineCountMap.set(l.account_id, (lineCountMap.get(l.account_id) || 0) + 1);
-    });
+    let offset = 0;
+    const batchSize = 1000;
+    while (true) {
+      const { data: batch } = await supabase
+        .from("lines")
+        .select("account_id")
+        .not("account_id", "is", null)
+        .or("is_deleted.is.null,is_deleted.eq.false")
+        .range(offset, offset + batchSize - 1);
+
+      (batch || []).forEach((l) => {
+        if (l.account_id)
+          lineCountMap.set(l.account_id, (lineCountMap.get(l.account_id) || 0) + 1);
+      });
+
+      if (!batch || batch.length < batchSize) break;
+      offset += batchSize;
+    }
 
     const providerMap = new Map<string, { accounts: number; lines: number }>();
     (allAccounts || []).forEach((a: any) => {
@@ -147,7 +183,7 @@ export default function AccountsPage() {
 
     setDashStats({
       totalAccounts: allAccounts?.length || 0,
-      totalLines: allLines?.length || 0,
+      totalLines: totalLinesCount || 0,
       byProvider: [...providerMap.entries()].map(([name, v]) => ({ name, ...v })),
       topAccounts,
     });
@@ -239,7 +275,7 @@ export default function AccountsPage() {
         })
         .filter((r) => r.account_no && r.provider_id);
 
-      // ─── شيلي المكررين قبل الـ upsert ────────────────────
+      // شيلي المكررين
       const unique = Array.from(
         new Map(records.map((r) => [r.account_no, r])).values()
       );
@@ -273,21 +309,8 @@ export default function AccountsPage() {
       });
     } finally {
       setImporting(false);
-      setImportProgress(0);
-      setImportText("");
       setImportFile(null);
     }
-  }
-
-  function downloadTemplate() {
-    const ws = XLSX.utils.json_to_sheet([{
-      account_no: "123456789",
-      account_name: "اسم الأكونت",
-      provider_name: "اتصالات",
-    }]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Accounts");
-    XLSX.writeFile(wb, "accounts-template.xlsx");
   }
 
   if (!authorized) return null;
@@ -442,10 +465,6 @@ export default function AccountsPage() {
               <PlusCircle className="w-4 h-4" /> إضافة أكونت
             </button>
           )}
-          <button onClick={downloadTemplate}
-            className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-5 py-2.5 rounded-xl font-medium text-sm transition shadow-sm">
-            <Download className="w-4 h-4" /> تحميل Template
-          </button>
         </div>
 
         {/* Import */}
@@ -456,7 +475,9 @@ export default function AccountsPage() {
               استيراد مجمع من Excel
             </p>
             <div className="flex flex-wrap gap-3 items-center">
-              <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-4 py-3 cursor-pointer transition text-sm ${importFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-blue-300 text-slate-400"}`}>
+              <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-4 py-3 cursor-pointer transition text-sm ${
+                importFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-blue-300 text-slate-400"
+              }`}>
                 <FileSpreadsheet className="w-4 h-4 shrink-0" />
                 {importFile ? importFile.name : "اختر ملف .xlsx"}
                 <input type="file" accept=".xlsx,.xls" className="hidden"
@@ -483,7 +504,9 @@ export default function AccountsPage() {
             )}
 
             {importResult && (
-              <div className={`mt-3 flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${importResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+              <div className={`mt-3 flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${
+                importResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+              }`}>
                 {importResult.status === "success" ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                 {importResult.message}
               </div>
@@ -520,64 +543,35 @@ export default function AccountsPage() {
             <Loader2 className="w-5 h-5 animate-spin" /> جاري التحميل...
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="p-3 text-right font-medium">رقم الأكونت</th>
-                  <th className="p-3 text-right font-medium">اسم الأكونت</th>
-                  <th className="p-3 text-right font-medium">الشبكة</th>
-                  <th className="p-3 text-right font-medium">عدد الخطوط</th>
-                  <th className="p-3 text-right font-medium">تاريخ الإضافة</th>
-                  {canEdit && <th className="p-3 text-center font-medium">إجراءات</th>}
-                </tr>
-              </thead>
-              <tbody className="text-slate-700">
-                {accounts.map((account) => {
-                  const color = getProviderColor(account.providers?.name || "");
-                  return (
-                    <tr key={account.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                      <td className="p-3 font-mono font-medium text-slate-900">{account.account_no}</td>
-                      <td className="p-3 text-slate-600">{account.account_name || "—"}</td>
-                      <td className="p-3">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${color.bg} ${color.text}`}>
-                          {account.providers?.name || "—"}
-                        </span>
-                      </td>
-                      <td className="p-3 font-bold text-slate-900">
-                        {account._lines_count?.toLocaleString() || 0}
-                      </td>
-                      <td className="p-3 text-slate-400 text-xs">
-                        {new Date(account.created_at).toLocaleDateString("ar-EG")}
-                      </td>
-                      {canEdit && (
-                        <td className="p-3">
-                          <div className="flex gap-2 justify-center">
-                            <button onClick={() => openEdit(account)}
-                              className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                            {isSuperAdmin && (
-                              <button onClick={() => deleteAccount(account.id)}
-                                className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-                {accounts.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="p-10 text-center text-slate-400">لا يوجد أكونتات</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div>
+            <SortableTable
+              columns={[
+                { key: "account_no", label: "رقم الأكونت", className: "font-mono font-medium text-slate-900" },
+                { key: "account_name", label: "اسم الأكونت", className: "text-slate-600" },
+                { label: "الشبكة", render: (a) => {
+                  const color = getProviderColor(a.providers?.name || "");
+                  return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${color.bg} ${color.text}`}>{a.providers?.name || "—"}</span>;
+                }},
+                { key: "_lines_count", label: "عدد الخطوط", className: "font-bold text-slate-900" },
+                { key: "created_at", label: "تاريخ الإضافة", render: (a) => new Date(a.created_at).toLocaleDateString("ar-EG") },
+              ]}
+              data={accounts}
+              actions={(account) => (
+                <>
+                  <button onClick={() => openEdit(account)}
+                    className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  {isSuperAdmin && (
+                    <button onClick={() => deleteAccount(account.id)}
+                      className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
+              )}
+            />
 
-            {/* Pagination */}
             <div className="flex justify-between items-center p-4 border-t border-slate-100" dir="ltr">
               <span className="text-xs text-slate-400">{total.toLocaleString()} نتيجة</span>
               <div className="flex items-center gap-2">

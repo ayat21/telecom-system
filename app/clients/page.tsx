@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import SortableTable from "@/app/components/SortableTable";
 import {
   Users, PlusCircle, Search, Pencil, Trash2, Loader2,
   Download, Upload, X, Check, ChevronLeft, ChevronRight,
@@ -214,17 +215,26 @@ async function importFromExcel() {
 }
 
   // ─── Export template ──────────────────────────────────────
-  function downloadTemplate() {
-    const ws = XLSX.utils.json_to_sheet([{
-      name: "محمد أحمد",
-      national_id: "12345678901234",
-      address: "القاهرة",
-      national_id_image: "",
-    }]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Clients");
-    XLSX.writeFile(wb, "clients-template.xlsx");
-  }
+  async function exportToExcel() {
+  const { data } = await supabase
+    .from("clients")
+    .select("*")
+    .order("id", { ascending: false });
+
+  if (!data) return;
+
+  const rows = data.map((c) => ({
+    "name": c.name,
+    "national_id": c.national_id || "",
+    "address": c.address || "",
+    "تاريخ الإضافة": new Date(c.created_at).toLocaleDateString("ar-EG"),
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "العملاء");
+  XLSX.writeFile(wb, `clients-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 
   if (!authorized) return null;
 
@@ -255,10 +265,10 @@ async function importFromExcel() {
               <PlusCircle className="w-4 h-4" /> إضافة عميل
             </button>
           )}
-          <button onClick={downloadTemplate}
-            className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 transition text-slate-700 px-5 py-2.5 rounded-xl shadow-sm font-medium text-sm">
-            <Download className="w-4 h-4" /> تحميل Template
-          </button>
+          <button onClick={exportToExcel}
+  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 transition text-slate-700 px-5 py-2.5 rounded-xl shadow-sm font-medium text-sm">
+  <Download className="w-4 h-4" /> تصدير كل العملاء
+</button>
         </div>
 
         {/* Import section */}
@@ -326,57 +336,31 @@ async function importFromExcel() {
             <Loader2 className="w-5 h-5 animate-spin" /> جاري التحميل...
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="p-3 text-right font-medium">#</th>
-                  <th className="p-3 text-right font-medium">الاسم</th>
-                  <th className="p-3 text-right font-medium">الرقم القومي</th>
-                  <th className="p-3 text-right font-medium">العنوان</th>
-                  <th className="p-3 text-right font-medium">تاريخ الإضافة</th>
-                  {(isSuperAdmin || isAdmin) && (
-                    <th className="p-3 text-center font-medium">إجراءات</th>
+          <div>
+            <SortableTable
+              columns={[
+                { key: "id", label: "#", className: "text-slate-400 text-xs" },
+                { key: "name", label: "الاسم", className: "font-medium text-slate-900" },
+                { key: "national_id", label: "الرقم القومي", className: "font-mono text-xs text-slate-500", render: (c) => c.national_id || "—" },
+                { key: "address", label: "العنوان", className: "text-slate-500" },
+                { key: "created_at", label: "تاريخ الإضافة", render: (c) => (c.created_at ? new Date(c.created_at).toLocaleDateString("ar-EG") : "—") },
+              ]}
+              data={clients}
+              actions={(client) => (
+                <>
+                  <button onClick={() => openEdit(client)} title="تعديل"
+                    className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  {isSuperAdmin && (
+                    <button onClick={() => deleteClient(client.id)} title="حذف"
+                      className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   )}
-                </tr>
-              </thead>
-              <tbody className="text-slate-700">
-                {clients.map((client) => (
-                  <tr key={client.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                    <td className="p-3 text-slate-400 text-xs">{client.id}</td>
-                    <td className="p-3 font-medium text-slate-900">{client.name}</td>
-                    <td className="p-3 text-slate-500 font-mono text-xs">{client.national_id || "—"}</td>
-                    <td className="p-3 text-slate-500">{client.address || "—"}</td>
-                    <td className="p-3 text-slate-400 text-xs">
-                      {new Date(client.created_at).toLocaleDateString("ar-EG")}
-                    </td>
-                    {(isSuperAdmin || isAdmin) && (
-                      <td className="p-3">
-                        <div className="flex gap-2 justify-center">
-                          <button onClick={() => openEdit(client)} title="تعديل"
-                            className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          {isSuperAdmin && (
-                            <button onClick={() => deleteClient(client.id)} title="حذف"
-                              className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {clients.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="p-10 text-center text-slate-400">
-                      لا يوجد عملاء
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                </>
+              )}
+            />
 
             {/* Pagination */}
             <div className="flex justify-between items-center p-4 border-t border-slate-100" dir="ltr">

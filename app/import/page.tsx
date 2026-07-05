@@ -1,5 +1,4 @@
 "use client";
-
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
@@ -30,7 +29,7 @@ const UPDATABLE_COLUMNS: { key: string; label: string }[] = [
   { key: "note", label: "ملاحظة" },
   { key: "report_note", label: "ملاحظة التقرير" },
   { key: "provider_name", label: "الشبكة (اسم)" },
-  { key: "almanafiz_name", label: "المنفذ (اسم)" },
+  { key: "almanafiz_name", label: "المنفذ / الهيئة (اسم)" },
   { key: "agent_name", label: "المندوب (اسم)" },
   { key: "line_status_name", label: "حالة الخط (اسم)" },
   { key: "calls_package_name", label: "باقة المكالمات (اسم)" },
@@ -42,14 +41,31 @@ const UPDATABLE_COLUMNS: { key: string; label: string }[] = [
   { key: "has_sim", label: "على شريحة (true/false)" },
 ];
 
-// ─── Lookup من cache ──────────────────────────────────────────
 function lookupId(cache: Map<string, number>, table: string, name: string): number | null {
   if (!name?.trim()) return null;
   return cache.get(`${table}:${name.trim().toLowerCase()}`) ?? null;
 }
 
-// ─── resolveRow ───────────────────────────────────────────────
-async function resolveRow(
+function parseExcelDate(value: any): string | null {
+  if (!value) return null;
+  const str = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
+    const parts = str.split("/");
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  const num = Number(value);
+  if (!isNaN(num) && num > 1000) {
+    const date = new Date((num - 25569) * 86400 * 1000);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+}
+
+function resolveRowSync(
   row: any,
   rowIndex: number,
   cache: Map<string, number>,
@@ -60,84 +76,69 @@ async function resolveRow(
   const rowErrors: string[] = [];
   const number = str(row["number"]);
 
-  // Provider
+  // Provider — مطلوب
   const providerName = str(row["provider_name"]);
   const provider_id = providerName ? lookupId(cache, "providers", providerName) : null;
-  if (providerName && !provider_id)
+  if (!providerName)
+    rowErrors.push(`عمود provider_name فاضي أو ناقص`);
+  else if (!provider_id)
     rowErrors.push(`الشبكة "${providerName}" غير موجودة`);
 
-  // Account — بيتطابق بـ account_no + provider_id
+  // Account
   const accountNo = str(row["account_no"]);
-  let account_id: number | null = null;
-  if (accountNo && provider_id) {
-    const cacheKey = `accounts:${accountNo.toLowerCase()}_${provider_id}`;
-    if (cache.has(cacheKey)) {
-      account_id = cache.get(cacheKey)!;
-    } else {
-      const { data: foundAcc } = await supabase
-        .from("accounts")
-        .select("id")
-        .eq("account_no", accountNo)
-        .eq("provider_id", provider_id)
-        .single();
-      if (foundAcc) {
-        account_id = foundAcc.id;
-        cache.set(cacheKey, foundAcc.id);
-      } else {
-        // أنشئه أوتو
-        const { data: created } = await supabase
-          .from("accounts")
-          .insert({ account_no: accountNo, provider_id })
-          .select("id")
-          .single();
-        if (created) {
-          account_id = created.id;
-          cache.set(cacheKey, created.id);
-        }
-      }
-    }
-  }
+  const account_id = accountNo && provider_id
+    ? cache.get(`accounts:${accountNo.toLowerCase()}_${provider_id}`) ?? null
+    : null;
 
-  // Almanafiz
+  // Almanafiz أو Heiaat — مطلوب
   const almanafizName = str(row["almanafiz_name"]);
-  const almanafiz_id = almanafizName ? lookupId(cache, "almanafiz", almanafizName) : null;
-  if (almanafizName && !almanafiz_id)
-    rowErrors.push(`المنفذ "${almanafizName}" غير موجود`);
-
+  let almanafiz_id: number | null = null;
+  let heiaat_id: number | null = null;
   let group_id: number | null = null;
   let department_id: number | null = null;
-  if (almanafiz_id) {
+
+ if (almanafizName) {
+  // دور في almanafiz الأول
+  const foundAlmanafiz = lookupId(cache, "almanafiz", almanafizName);
+  if (foundAlmanafiz) {
+    almanafiz_id = foundAlmanafiz;
     const found = refData.almanafizData.find((a: any) => a.id === almanafiz_id);
     if (found) {
       group_id = found.group_id;
       department_id = found.groups?.department_id || null;
     }
+  } else {
+    // دور في heiaat
+    const foundHeiaat = lookupId(cache, "heiaat", almanafizName);
+    if (foundHeiaat) {
+      heiaat_id = foundHeiaat;
+      const found = refData.heiaatData.find((h: any) => h.id === heiaat_id);
+      if (found) group_id = found.group_id;
+    } else {
+      // لو مش موجود في الاتنين — error
+      rowErrors.push(`المنفذ/الهيئة "${almanafizName}" غير موجود في النظام`);
+    }
   }
+}
 
-  // Agent
+  // Agent — مطلوب
   const agentName = str(row["agent_name"]);
   const agent_id = agentName ? lookupId(cache, "agents", agentName) : null;
-  if (agentName && !agent_id)
+  if (!agentName)
+    rowErrors.push(`عمود agent_name فاضي أو ناقص`);
+  else if (!agent_id)
     rowErrors.push(`المندوب "${agentName}" غير موجود`);
 
-  // Client
+  // Client — من cache بس
   const clientName = str(row["client_name"]);
+  const clientNationalId = str(row["national_id"]);
   let client_id: number | null = null;
-  if (clientName) {
-    const cached = lookupId(cache, "clients", clientName);
-    if (cached) {
-      client_id = cached;
-    } else {
-      const { data: created } = await supabase
-        .from("clients")
-        .insert({ name: clientName.trim() })
-        .select("id")
-        .single();
-      if (created) {
-        client_id = created.id;
-        cache.set(`clients:${clientName.trim().toLowerCase()}`, created.id);
-      }
-    }
+
+  if (clientNationalId) {
+    client_id = cache.get(`clients_nid:${clientNationalId.toLowerCase()}`) ?? null;
+  }
+  if (!client_id && clientName) {
+    client_id = cache.get(`clients:${clientName.toLowerCase()}`) ?? null;
   }
 
   // Line Status
@@ -188,24 +189,23 @@ async function resolveRow(
       rowErrors.push(`الإضافة "${lineExtensionName}" غير موجودة`);
   }
 
-  if (rowErrors.length > 0) {
+  if (rowErrors.length > 0)
     errors.push({ row: rowIndex + 2, number, errors: rowErrors });
-  }
 
-  // has_sim
   const hasSim = str(row["has_sim"]);
   const has_sim = hasSim === "true" || hasSim === "1" || hasSim === "نعم";
 
   return {
     number,
-    account_no: accountNo || null,
-    customer_date_real: str(row["customer_date_real"]) || null,
+    customer_date_real: parseExcelDate(row["customer_date_real"]),
     serial_number: str(row["serial_number"]) || null,
     note: str(row["note"]) || null,
     report_note: str(row["report_note"]) || null,
     has_sim,
-    client_id, provider_id, account_id, almanafiz_id,
-    department_id, group_id, agent_id, line_status_id,
+    client_id, provider_id, account_id,
+    almanafiz_id, heiaat_id,
+    department_id, group_id,
+    agent_id, line_status_id,
     calls_package_id, internet_package_id, line_extension_id,
     calls_package_price:    Number(row["calls_package_price"] || 0),
     internet_package_price: Number(row["internet_package_price"] || 0),
@@ -215,6 +215,8 @@ async function resolveRow(
       Number(row["internet_package_price"] || 0) +
       Number(row["line_extension_price"] || 0),
     _hasErrors: rowErrors.length > 0,
+    _client_name: clientName,
+    _client_national_id: clientNationalId,
   };
 }
 
@@ -260,29 +262,41 @@ export default function ImportPage() {
 
   async function loadReferenceTables() {
     const [
-      { data: providers }, { data: almanafiz }, { data: agents },
-      { data: clients }, { data: lineStatuses },
+      { data: providers }, { data: almanafiz }, { data: heiaat },
+      { data: agents }, { data: clients }, { data: lineStatuses },
       { data: callsPackages }, { data: internetPackages }, { data: lineExtensions },
+      { data: accounts },
     ] = await Promise.all([
       supabase.from("providers").select("id, name"),
       supabase.from("almanafiz").select("id, name, group_id, groups(id, name, department_id, departments(id, name))"),
+      supabase.from("heiaat").select("id, name, group_id"),
       supabase.from("agents").select("id, name"),
-      supabase.from("clients").select("id, name"),
+      supabase.from("clients").select("id, name, national_id"),
       supabase.from("line_statuses").select("id, name, provider_id"),
       supabase.from("calls_packages").select("id, package_name, provider_id"),
       supabase.from("internet_packages").select("id, package_name, provider_id"),
       supabase.from("line_extensions").select("id, extension_name, provider_id"),
+      supabase.from("accounts").select("id, account_no, provider_id"),
     ]);
 
     const cache = new Map<string, number>();
     (providers || []).forEach((x) => cache.set(`providers:${x.name.toLowerCase()}`, x.id));
     (almanafiz || []).forEach((x) => cache.set(`almanafiz:${x.name.toLowerCase()}`, x.id));
+    (heiaat || []).forEach((x) => cache.set(`heiaat:${x.name.toLowerCase()}`, x.id));
     (agents || []).forEach((x) => cache.set(`agents:${x.name.toLowerCase()}`, x.id));
-    (clients || []).forEach((x) => cache.set(`clients:${x.name.toLowerCase()}`, x.id));
+    (clients || []).forEach((x) => {
+      cache.set(`clients:${x.name.toLowerCase()}`, x.id);
+      if (x.national_id)
+        cache.set(`clients_nid:${x.national_id.toLowerCase()}`, x.id);
+    });
+    (accounts || []).forEach((x) =>
+      cache.set(`accounts:${x.account_no.toLowerCase()}_${x.provider_id}`, x.id)
+    );
 
     return {
       cache,
       almanafizData: almanafiz || [],
+      heiaatData: heiaat || [],
       lineStatusesData: lineStatuses || [],
       callsPackagesData: callsPackages || [],
       internetPackagesData: internetPackages || [],
@@ -323,17 +337,23 @@ export default function ImportPage() {
         setProgressText("جارٍ تحميل الجداول المرجعية...");
         const refData = await loadReferenceTables();
 
-        setProgressText(`جارٍ التحقق من ${rows.length} سجل...`);
+        setProgressText(`جارٍ معالجة ${rows.length.toLocaleString()} سجل...`);
         const records: any[] = [];
         const allErrors: RowError[] = [];
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
           if (!String(row["number"] || "").trim()) continue;
-          const resolved = await resolveRow(row, i, refData.cache, refData, allErrors);
+          const resolved = resolveRowSync(row, i, refData.cache, refData, allErrors);
           records.push(resolved);
-          setProgressPercent(Math.round(((i + 1) / rows.length) * 40));
+          if (i % 2000 === 0) {
+            setProgressPercent(Math.round((i / rows.length) * 25));
+            setProgressText(`جارٍ معالجة ${i.toLocaleString()} من ${rows.length.toLocaleString()}...`);
+            await new Promise(r => setTimeout(r, 0));
+          }
         }
+
+        setProgressPercent(25);
 
         if (allErrors.length > 0) {
           downloadErrorsExcel(allErrors);
@@ -346,24 +366,83 @@ export default function ImportPage() {
           return;
         }
 
+        // ─── أضيفي العملاء الجدد ─────────────────────────────
+        const normalize = (s:string)=>s.trim().replace(/\s+/g," ").toLowerCase();
+
+        const newClientNames=[...new Set(
+          records.filter(r=>r._client_name).map(r=>normalize(r._client_name))
+        )];
+
+        if(newClientNames.length){
+          setProgressText(`جارٍ معالجة ${newClientNames.length} عميل...`);
+
+          const {data:allClients}=await supabase.from("clients").select("id,name");
+
+          const existingMap=new Map<string,number>();
+          (allClients||[]).forEach(c=>existingMap.set(normalize(c.name),c.id));
+
+          const toInsert=newClientNames.filter(n=>!existingMap.has(n));
+
+          for(let i=0;i<toInsert.length;i+=500){
+            const {data}=await supabase.from("clients")
+              .insert(toInsert.slice(i,i+500).map(name=>({name})))
+              .select("id,name");
+
+            (data||[]).forEach(c=>existingMap.set(normalize(c.name),c.id));
+          }
+
+          records.forEach(r=>{
+            if(r._client_name){
+              r.client_id=existingMap.get(normalize(r._client_name))??null;
+            }
+          });
+        }
+
+        setProgressPercent(35);
+
+        // ─── أضيفي الأكونتات الجديدة ──────────────────────────
+        const newAccounts = [...new Map(
+          records
+            .filter((r) => r.account_no && r.provider_id && !r.account_id)
+            .map((r) => [`${r.account_no}_${r.provider_id}`, { account_no: r.account_no, provider_id: r.provider_id }])
+        ).values()];
+
+        if (newAccounts.length > 0) {
+          setProgressText(`جارٍ إضافة ${newAccounts.length} أكونت جديد...`);
+          const { data: createdAccounts } = await supabase
+            .from("accounts").insert(newAccounts).select("id, account_no, provider_id");
+          (createdAccounts || []).forEach((a) => {
+            records.forEach((r) => {
+              if (r.account_no === a.account_no && r.provider_id === a.provider_id)
+                r.account_id = a.id;
+            });
+          });
+        }
+
+        setProgressPercent(40);
+
+        // ─── ارفعي لـ Supabase ────────────────────────────────
         const unique = Array.from(new Map(records.map((r) => [r.number, r])).values())
-          .map(({ _hasErrors, ...rest }) => rest);
+          .map(({ _hasErrors, _client_name, _client_national_id, ...rest }) => rest);
         const dupes = records.length - unique.length;
 
-        setProgressText(`جارٍ رفع ${unique.length} سجل...`);
+        setProgressText(`جارٍ رفع ${unique.length.toLocaleString()} سجل...`);
         for (let i = 0; i < unique.length; i += 500) {
           const batch = unique.slice(i, i + 500);
+          console.log(
+  records.filter(r => r.client_id == null).slice(0,20)
+);
           const { error } = await supabase.from("lines").upsert(batch, { onConflict: "number" });
           if (error) throw new Error(error.message);
           const done = Math.min(i + 500, unique.length);
           setProgressPercent(40 + Math.round((done / unique.length) * 60));
-          setProgressText(`تم رفع ${done} من ${unique.length} سجل...`);
+          setProgressText(`تم رفع ${done.toLocaleString()} من ${unique.length.toLocaleString()} سجل...`);
         }
 
         setResult({
           status: "success",
           message: "تم الاستيراد بنجاح ✅",
-          details: `إجمالي: ${records.length} | فريدة: ${unique.length} | مكررة: ${dupes}`,
+          details: `إجمالي: ${records.length.toLocaleString()} | فريدة: ${unique.length.toLocaleString()} | مكررة: ${dupes}`,
         });
       }
 
@@ -379,13 +458,16 @@ export default function ImportPage() {
         const hasNameCols = selectedColumns.some((c) => NAME_COLS.includes(c));
 
         if (hasNameCols) {
-          setProgressText(`جارٍ التحقق من ${rows.length} سجل...`);
+          setProgressText(`جارٍ التحقق من ${rows.length.toLocaleString()} سجل...`);
           const allErrors: RowError[] = [];
           for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             if (!String(row["number"] || "").trim()) continue;
-            await resolveRow(row, i, refData.cache, refData, allErrors);
-            setProgressPercent(Math.round(((i + 1) / rows.length) * 30));
+            resolveRowSync(row, i, refData.cache, refData, allErrors);
+            if (i % 2000 === 0) {
+              setProgressPercent(Math.round((i / rows.length) * 30));
+              await new Promise(r => setTimeout(r, 0));
+            }
           }
           if (allErrors.length > 0) {
             downloadErrorsExcel(allErrors);
@@ -399,68 +481,54 @@ export default function ImportPage() {
           }
         }
 
-        setProgressText(`جارٍ تحديث ${rows.length} سجل...`);
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          const number = String(row["number"] || "").trim();
-          if (!number) continue;
-
-          const updates: Record<string, any> = {};
-
-          if (hasNameCols) {
-            const resolved = await resolveRow(row, i, refData.cache, refData, []);
-            for (const col of selectedColumns) {
-              switch (col) {
-                case "provider_name":         updates.provider_id = resolved.provider_id; break;
-                case "account_no":            updates.account_id = resolved.account_id; break;
-                case "almanafiz_name":        updates.almanafiz_id = resolved.almanafiz_id; updates.group_id = resolved.group_id; updates.department_id = resolved.department_id; break;
-                case "agent_name":            updates.agent_id = resolved.agent_id; break;
-                case "line_status_name":      updates.line_status_id = resolved.line_status_id; break;
-                case "calls_package_name":    updates.calls_package_id = resolved.calls_package_id; break;
-                case "internet_package_name": updates.internet_package_id = resolved.internet_package_id; break;
-                case "line_extension_name":   updates.line_extension_id = resolved.line_extension_id; break;
-                case "calls_package_price":   updates.calls_package_price = Number(row[col] || 0); break;
-                case "internet_package_price":updates.internet_package_price = Number(row[col] || 0); break;
-                case "line_extension_price":  updates.line_extension_price = Number(row[col] || 0); break;
-                case "has_sim": {
-                  const v = String(row[col] || "").trim();
-                  updates.has_sim = v === "true" || v === "1" || v === "نعم";
-                  break;
+        setProgressText(`جارٍ تحديث ${rows.length.toLocaleString()} سجل...`);
+        for (let i = 0; i < rows.length; i += 100) {
+          const batch = rows.slice(i, i + 100);
+          await Promise.all(batch.map(async (row) => {
+            const number = String(row["number"] || "").trim();
+            if (!number) return;
+            const updates: Record<string, any> = {};
+            if (hasNameCols) {
+              const resolved = resolveRowSync(row, 0, refData.cache, refData, []);
+              for (const col of selectedColumns) {
+                switch (col) {
+                  case "provider_name":         updates.provider_id = resolved.provider_id; break;
+                  case "account_no":            updates.account_id = resolved.account_id; break;
+                  case "almanafiz_name":
+                    updates.almanafiz_id = resolved.almanafiz_id;
+                    updates.heiaat_id = resolved.heiaat_id;
+                    updates.group_id = resolved.group_id;
+                    updates.department_id = resolved.department_id;
+                    break;
+                  case "agent_name":            updates.agent_id = resolved.agent_id; break;
+                  case "line_status_name":      updates.line_status_id = resolved.line_status_id; break;
+                  case "calls_package_name":    updates.calls_package_id = resolved.calls_package_id; break;
+                  case "internet_package_name": updates.internet_package_id = resolved.internet_package_id; break;
+                  case "line_extension_name":   updates.line_extension_id = resolved.line_extension_id; break;
+                  case "calls_package_price":   updates.calls_package_price = Number(row[col] || 0); break;
+                  case "internet_package_price": updates.internet_package_price = Number(row[col] || 0); break;
+                  case "line_extension_price":  updates.line_extension_price = Number(row[col] || 0); break;
+                  case "has_sim": {
+                    const v = String(row[col] || "").trim();
+                    updates.has_sim = v === "true" || v === "1" || v === "نعم";
+                    break;
+                  }
+                  default: updates[col] = row[col] || null;
                 }
-                default: updates[col] = row[col] || null;
               }
+            } else {
+              for (const col of selectedColumns) updates[col] = row[col] || null;
             }
-
-            if (selectedColumns.some((c) => ["calls_package_price", "internet_package_price", "line_extension_price"].includes(c))) {
-              const { data: existing } = await supabase
-                .from("lines")
-                .select("calls_package_price, internet_package_price, line_extension_price")
-                .eq("number", number).single();
-              if (existing) {
-                updates.total_price =
-                  Number(updates.calls_package_price ?? existing.calls_package_price ?? 0) +
-                  Number(updates.internet_package_price ?? existing.internet_package_price ?? 0) +
-                  Number(updates.line_extension_price ?? existing.line_extension_price ?? 0);
-              }
-            }
-          } else {
-            for (const col of selectedColumns) {
-              updates[col] = row[col] || null;
-            }
-          }
-
-          await supabase.from("lines").update(updates).eq("number", number);
-          setProgressPercent(
-            hasNameCols
-              ? 30 + Math.round(((i + 1) / rows.length) * 70)
-              : Math.round(((i + 1) / rows.length) * 100)
-          );
+            await supabase.from("lines").update(updates).eq("number", number);
+          }));
+          setProgressPercent(Math.round(((i + 100) / rows.length) * 100));
+          setProgressText(`تم تحديث ${Math.min(i + 100, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
         }
 
         setResult({
           status: "success",
           message: "تم التحديث المجمع بنجاح ✅",
-          details: `تم تحديث ${rows.length} سجل`,
+          details: `تم تحديث ${rows.length.toLocaleString()} سجل`,
         });
       }
 
@@ -496,8 +564,8 @@ export default function ImportPage() {
         for (let i = 0; i < numbers.length; i += 500) {
           const batch = numbers.slice(i, i + 500);
           const { error } = await supabase.from("lines").update({
-            client_id: null, almanafiz_id: null, department_id: null,
-            group_id: null, account_id: null, is_deleted: true,
+            client_id: null, almanafiz_id: null, heiaat_id: null,
+            department_id: null, group_id: null, account_id: null, is_deleted: true,
           }).in("number", batch);
           if (error) throw new Error(error.message);
           setProgressPercent(Math.round((Math.min(i + 500, numbers.length) / numbers.length) * 100));
@@ -515,13 +583,19 @@ export default function ImportPage() {
         setProgressText("جارٍ تحميل الجداول المرجعية...");
         const refData = await loadReferenceTables();
 
-        setProgressText(`جارٍ التحقق من ${rows.length} سجل...`);
+        setProgressText(`جارٍ معالجة ${rows.length.toLocaleString()} سجل...`);
         const allErrors: RowError[] = [];
+        const records: any[] = [];
+
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
           if (!String(row["number"] || "").trim()) continue;
-          await resolveRow(row, i, refData.cache, refData, allErrors);
-          setProgressPercent(Math.round(((i + 1) / rows.length) * 30));
+          const resolved = resolveRowSync(row, i, refData.cache, refData, allErrors);
+          records.push(resolved);
+          if (i % 2000 === 0) {
+            setProgressPercent(Math.round((i / rows.length) * 30));
+            await new Promise(r => setTimeout(r, 0));
+          }
         }
 
         if (allErrors.length > 0) {
@@ -535,26 +609,24 @@ export default function ImportPage() {
           return;
         }
 
-        setProgressText(`جارٍ رفع البيانات لـ ${rows.length} سجل...`);
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          const number = String(row["number"] || "").trim();
-          if (!number) continue;
-
-          const resolved = await resolveRow(row, i, refData.cache, refData, []);
-          const { number: _, _hasErrors, ...rest } = resolved;
-          const cleanUpdates = Object.fromEntries(
-            Object.entries(rest).filter(([, v]) => v !== null && v !== "" && v !== 0)
-          );
-
-          await supabase.from("lines").update(cleanUpdates).eq("number", number);
-          setProgressPercent(30 + Math.round(((i + 1) / rows.length) * 70));
+        setProgressText(`جارٍ رفع البيانات لـ ${records.length.toLocaleString()} سجل...`);
+        for (let i = 0; i < records.length; i += 100) {
+          const batch = records.slice(i, i + 100);
+          await Promise.all(batch.map(async (resolved) => {
+            const { number: num, _hasErrors, _client_name, _client_national_id, ...rest } = resolved;
+            const cleanUpdates = Object.fromEntries(
+              Object.entries(rest).filter(([, v]) => v !== null && v !== "" && v !== 0)
+            );
+            await supabase.from("lines").update(cleanUpdates).eq("number", num);
+          }));
+          setProgressPercent(30 + Math.round(((i + 100) / records.length) * 70));
+          setProgressText(`تم رفع ${Math.min(i + 100, records.length).toLocaleString()} من ${records.length.toLocaleString()}...`);
         }
 
         setResult({
           status: "success",
           message: "تم رفع البيانات بنجاح ✅",
-          details: `تم تحديث ${rows.length} سجل`,
+          details: `تم تحديث ${records.length.toLocaleString()} سجل`,
         });
       }
 
@@ -582,7 +654,6 @@ export default function ImportPage() {
     <div dir="rtl" className="min-h-screen bg-slate-50 font-sans p-6 md:p-10">
       <div className="max-w-2xl mx-auto">
 
-        {/* Header */}
         <div className="flex items-center gap-3 mb-8">
           <span className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center">
             <Database className="w-6 h-6 text-blue-600" />
@@ -673,10 +744,9 @@ export default function ImportPage() {
               <input type="file" accept=".xlsx,.xls" className="hidden"
                 onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
             </label>
-
             <div className="mt-2 text-xs text-slate-400">
               {importType === "full" && (
-                <p>الأعمدة: <span className="font-mono">number, provider_name, account_no, almanafiz_name, agent_name, client_name, line_status_name, calls_package_name, internet_package_name, line_extension_name, calls_package_price, internet_package_price, line_extension_price, has_sim, serial_number, customer_date_real, note, report_note</span></p>
+                <p>الأعمدة: <span className="font-mono">number, provider_name, account_no, almanafiz_name, agent_name, client_name, national_id, line_status_name, calls_package_name, internet_package_name, line_extension_name, calls_package_price, internet_package_price, line_extension_price, has_sim, serial_number, customer_date_real, note, report_note</span></p>
               )}
               {importType === "bulk_update" && <p>الأعمدة: <span className="font-mono">number</span> + الأعمدة المحددة فوق</p>}
               {importType === "bulk_delete" && <p>الأعمدة: <span className="font-mono">number</span> فقط</p>}
@@ -701,7 +771,7 @@ export default function ImportPage() {
               </div>
               <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                  style={{ width: progressPercent > 0 ? `${progressPercent}%` : "10%" }} />
+                  style={{ width: progressPercent > 0 ? `${progressPercent}%` : "5%" }} />
               </div>
             </div>
           )}

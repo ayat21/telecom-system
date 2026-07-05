@@ -7,6 +7,7 @@ import {
   Activity, Network, Loader2, PlusCircle, Pencil, Trash2,
   X, Check, ChevronDown, Hash,
 } from "lucide-react";
+import SortableTable from "@/app/components/SortableTable";
 
 interface LineStatus {
   id: number;
@@ -61,34 +62,38 @@ export default function LineStatusesPage() {
 
   // ─── Load ─────────────────────────────────────────────────
   async function loadData() {
-    setLoading(true);
+  setLoading(true);
 
-    const [{ data: p }, { data: s }, { data: linesData }] = await Promise.all([
-      supabase.from("providers").select("*"),
-      supabase.from("line_statuses").select("*, providers(name)"),
-      supabase.from("lines")
-        .select("line_status_id")
-        .or("is_deleted.is.null,is_deleted.eq.false"),
-    ]);
+  const [{ data: p }, { data: s }] = await Promise.all([
+    supabase.from("providers").select("*"),
+    supabase.from("line_statuses").select("*, providers(name)"),
+  ]);
 
-    setProviders(p || []);
+  setProviders(p || []);
 
-    // احسب عدد الخطوط لكل حالة
-    const countMap = new Map<number, number>();
-    (linesData || []).forEach((line) => {
-      if (line.line_status_id) {
-        countMap.set(line.line_status_id, (countMap.get(line.line_status_id) || 0) + 1);
-      }
-    });
+  // جيبي عدد الخطوط لكل حالة من Supabase مباشرة
+  const statusIds = (s || []).map((x) => x.id);
+  const countMap = new Map<number, number>();
 
-    const withCounts = (s || []).map((status) => ({
-      ...status,
-      _count: countMap.get(status.id) || 0,
-    }));
+  await Promise.all(
+    statusIds.map(async (statusId) => {
+      const { count } = await supabase
+        .from("lines")
+        .select("*", { count: "exact", head: true })
+        .eq("line_status_id", statusId)
+        .or("is_deleted.is.null,is_deleted.eq.false");
+      countMap.set(statusId, count || 0);
+    })
+  );
 
-    setStatuses(withCounts);
-    setLoading(false);
-  }
+  const withCounts = (s || []).map((status) => ({
+    ...status,
+    _count: countMap.get(status.id) || 0,
+  }));
+
+  setStatuses(withCounts);
+  setLoading(false);
+}
 
   useEffect(() => { loadData(); }, []);
 
@@ -136,12 +141,24 @@ export default function LineStatusesPage() {
     loadData();
   }
 
-  async function deleteStatus(id: number) {
-    if (!confirm("هل أنت متأكد من حذف الحالة؟")) return;
-    const { error } = await supabase.from("line_statuses").delete().eq("id", id);
-    if (error) { alert(error.message); return; }
-    loadData();
-  }
+ async function deleteStatus(id: number) {
+  if (!confirm("هل أنت متأكد من حذف الحالة؟")) return;
+  
+  // شيلي الحالة من الخطوط الأول
+  await supabase
+    .from("lines")
+    .update({ line_status_id: null })
+    .eq("line_status_id", id);
+
+  // بعدين احذف الحالة
+  const { error } = await supabase
+    .from("line_statuses")
+    .delete()
+    .eq("id", id);
+    
+  if (error) { alert(error.message); return; }
+  loadData();
+}
 
   if (!authorized) return null;
 
@@ -304,66 +321,39 @@ export default function LineStatusesPage() {
             <div className="px-5 py-4 border-b border-slate-100">
               <h2 className="text-sm font-semibold text-slate-700">جدول الحالات</h2>
             </div>
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="p-3 text-right font-medium">الحالة</th>
-                  <th className="p-3 text-right font-medium">الشبكة</th>
-                  <th className="p-3 text-right font-medium">عدد الخطوط</th>
-                  <th className="p-3 text-right font-medium">النسبة</th>
-                  {canEdit && <th className="p-3 text-center font-medium">إجراءات</th>}
-                </tr>
-              </thead>
-              <tbody className="text-slate-700">
-                {filtered
-                  .sort((a, b) => (b._count || 0) - (a._count || 0))
-                  .map((status, i) => {
-                    const color = CARD_COLORS[i % CARD_COLORS.length];
-                    const percent = totalLines > 0
-                      ? Math.round(((status._count || 0) / totalLines) * 100)
-                      : 0;
-
-                    return (
-                      <tr key={status.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                        <td className="p-3">
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${color.bg} ${color.text}`}>
-                            {status.name}
-                          </span>
-                        </td>
-                        <td className="p-3 text-slate-500">{status.providers?.name || "—"}</td>
-                        <td className="p-3 font-bold text-slate-900">
-                          {(status._count || 0).toLocaleString()}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${color.count.replace("text-", "bg-")}`}
-                                style={{ width: `${percent}%` }} />
-                            </div>
-                            <span className="text-xs text-slate-400 w-8 text-left">{percent}%</span>
-                          </div>
-                        </td>
-                        {canEdit && (
-                          <td className="p-3">
-                            <div className="flex gap-2 justify-center">
-                              <button onClick={() => openEdit(status)}
-                                className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              {isSuperAdmin && (
-                                <button onClick={() => deleteStatus(status.id)}
-                                  className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
+            <SortableTable
+              columns={[
+                { label: "الحالة", render: (s) => <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-white/70 text-slate-700">{s.name}</span> },
+                { label: "الشبكة", render: (s) => s.providers?.name || "—" },
+                { key: "_count", label: "عدد الخطوط", render: (s) => (s._count || 0).toLocaleString(), className: "font-bold text-slate-900" },
+                { label: "النسبة", render: (s) => {
+                  const percent = totalLines > 0 ? Math.round(((s._count || 0) / totalLines) * 100) : 0;
+                  return (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full bg-blue-600`} style={{ width: `${percent}%` }} />
+                      </div>
+                      <span className="text-xs text-slate-400 w-8 text-left">{percent}%</span>
+                    </div>
+                  );
+                }},
+              ]}
+              data={filtered.sort((a,b)=> (b._count||0)-(a._count||0))}
+              actions={(status) => (
+                <>
+                  <button onClick={() => openEdit(status)}
+                    className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  {isSuperAdmin && (
+                    <button onClick={() => deleteStatus(status.id)}
+                      className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
+              )}
+            />
           </div>
         )}
       </div>

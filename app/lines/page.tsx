@@ -10,6 +10,7 @@ import {
   Search, Filter, Calendar, Network, Eye, Pencil, Trash2,
   ChevronRight, ChevronLeft, Loader2,
 } from "lucide-react";
+import SortableTable from "@/app/components/SortableTable";
 
 export default function LinesPage() {
   const router = useRouter();
@@ -68,7 +69,7 @@ export default function LinesPage() {
     let query = supabase
       .from("lines")
       .select(`
-        id, number, customer_date_real, report_note, total_price, has_sim,
+        id,client_id, number, customer_date_real, report_note, total_price, has_sim,
         clients(name),
         providers(name),
         almanafiz(name),
@@ -90,6 +91,7 @@ export default function LinesPage() {
     query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
     const { data, error } = await query;
+    console.log(data?.[0]);
     if (!error) setLines(data || []);
     setLoading(false);
   }
@@ -209,7 +211,7 @@ export default function LinesPage() {
           let q = supabase
             .from("lines")
             .select(`
-              id, number, customer_date_real, report_note, total_price,
+              id, number, client_id,customer_date_real, report_note, total_price,
               serial_number, has_sim, note,
               calls_package_price, internet_package_price, line_extension_price,
               clients(name, national_id, address),
@@ -438,72 +440,42 @@ export default function LinesPage() {
         <div className="flex items-center justify-center gap-2 bg-white rounded-2xl shadow-sm border border-slate-100 py-16 text-slate-400">
           <Loader2 className="w-5 h-5 animate-spin" /> جاري التحميل...
         </div>
-      ) : (
-        <div className="overflow-auto bg-white rounded-2xl shadow-sm border border-slate-100">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="p-3 text-right font-medium">الرقم</th>
-                <th className="p-3 text-right font-medium">العميل</th>
-                <th className="p-3 text-right font-medium">التاريخ</th>
-                <th className="p-3 text-right font-medium">المنفذ</th>
-                <th className="p-3 text-right font-medium">الشبكة</th>
-                <th className="p-3 text-right font-medium">حالة الخط</th>
-                <th className="p-3 text-right font-medium">باقة المكالمات</th>
-                <th className="p-3 text-right font-medium">إجمالي السعر</th>
-                <th className="p-3 text-center font-medium">إجراءات</th>
-              </tr>
-            </thead>
-            <tbody className="text-slate-700 text-[15px]">
-              {lines.map((line) => (
-                <tr key={line.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                  <td className="p-3 font-medium text-slate-900">{line.number}</td>
-                  <td className="p-3">{line.clients?.name || "—"}</td>
-                  <td className="p-3 text-slate-500">{line.customer_date_real || "—"}</td>
-                  <td className="p-3">{line.almanafiz?.name || "—"}</td>
-                  <td className="p-3">
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                      {line.providers?.name || "—"}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    {line.line_statuses?.name ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
-                        {line.line_statuses.name}
-                      </span>
-                    ) : "—"}
-                  </td>
-                  <td className="p-3">{line.calls_packages?.package_name || "—"}</td>
-                  <td className="p-3 font-semibold text-slate-900">{line.total_price || 0}</td>
-                  <td className="p-3">
-                    <div className="flex gap-2 justify-center">
-                      <button onClick={() => router.push(`/lines/view/${line.id}`)} title="عرض"
-                        className="bg-sky-50 hover:bg-sky-100 text-sky-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      {(isSuperAdmin || isAdmin) && (
-                        <button onClick={() => router.push(`/lines/${line.id}`)} title="تعديل"
-                          className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                      )}
-                      {isSuperAdmin && (
-                        <button onClick={() => deleteLine(line.id)} title="حذف"
-                          className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {lines.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="p-10 text-center text-slate-400">لا توجد خطوط</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        ) : (
+        <div>
+          <SortableTable
+            columns={[
+              { key: "number", label: "الرقم", className: "font-medium text-slate-900" },
+              { label: "العميل", render: (r) => r.clients?.name || "—" },
+              { key: "customer_date_real", label: "التاريخ" },
+              { label: "المنفذ", render: (r) => r.almanafiz?.name || "—" },
+              { label: "الشبكة", render: (r) => <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{r.providers?.name || "—"}</span> },
+              { label: "حالة الخط", render: (r) => r.line_statuses?.name ? <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700">{r.line_statuses.name}</span> : "—" },
+              { label: "باقة المكالمات", render: (r) => r.calls_packages?.package_name || "—" },
+              { key: "total_price", label: "إجمالي السعر", className: "font-semibold text-slate-900" },
+            ]}
+            data={lines}
+            idKey="id"
+            actions={(line) => (
+              <>
+                <button onClick={() => router.push(`/lines/view/${line.id}`)} title="عرض"
+                  className="bg-sky-50 hover:bg-sky-100 text-sky-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                  <Eye className="w-4 h-4" />
+                </button>
+                {(isSuperAdmin || isAdmin) && (
+                  <button onClick={() => router.push(`/lines/${line.id}`)} title="تعديل"
+                    className="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                )}
+                {isSuperAdmin && (
+                  <button onClick={() => deleteLine(line.id)} title="حذف"
+                    className="bg-red-50 hover:bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-lg transition">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </>
+            )}
+          />
 
           <div className="flex justify-start items-center gap-2 p-4 border-t border-slate-100" dir="ltr">
             <button disabled={page === 1} onClick={() => setPage(page - 1)}
