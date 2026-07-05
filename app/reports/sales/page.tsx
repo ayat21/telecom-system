@@ -82,7 +82,7 @@ export default function SalesPage() {
   const [loading, setLoading] = useState(false);
 
   const [stats, setStats] = useState({
-    totalLines: 0, sales: 0, migration: 0, unsold: 0,
+    totalLines: 0, totalInventory: 0, sales: 0, migration: 0, unsold: 0,
   });
 
   useEffect(() => {
@@ -131,10 +131,22 @@ export default function SalesPage() {
     setLines(result);
 
     const migration = result.filter((x) => x.department_id === MIGRATION_DEPT_ID).length;
-    const unsold = result.filter((x) => !x.department_id).length;
     const sales = result.filter((x) => x.department_id && x.department_id !== MIGRATION_DEPT_ID).length;
 
-    setStats({ totalLines: result.length, sales, migration, unsold });
+    const totalInventoryQuery = supabase.from("lines").select("*", { count: "exact", head: true })
+      .or("is_deleted.is.null,is_deleted.eq.false");
+    if (filterProvider) totalInventoryQuery.eq("provider_id", Number(filterProvider));
+    if (filterAgent) totalInventoryQuery.eq("agent_id", Number(filterAgent));
+    const { count: totalInventoryCount } = await totalInventoryQuery;
+
+    const unsoldQuery = supabase.from("lines").select("*", { count: "exact", head: true })
+      .or("is_deleted.is.null,is_deleted.eq.false")
+      .is("department_id", null);
+    if (filterProvider) unsoldQuery.eq("provider_id", Number(filterProvider));
+    if (filterAgent) unsoldQuery.eq("agent_id", Number(filterAgent));
+    const { count: unsoldCount } = await unsoldQuery;
+
+    setStats({ totalLines: result.length, totalInventory: totalInventoryCount || 0, sales, migration, unsold: unsoldCount || 0 });
     setLoading(false);
   }
 
@@ -179,9 +191,9 @@ export default function SalesPage() {
     return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [lines]);
 
-  const salesPercent = stats.totalLines > 0 ? ((stats.sales / stats.totalLines) * 100).toFixed(2) : "0.00";
-  const migrationPercent = stats.totalLines > 0 ? ((stats.migration / stats.totalLines) * 100).toFixed(2) : "0.00";
-  const unsoldPercent = stats.totalLines > 0 ? ((stats.unsold / stats.totalLines) * 100).toFixed(2) : "0.00";
+  const salesPercent = stats.totalInventory > 0 ? ((stats.sales / stats.totalInventory) * 100).toFixed(2) : "0.00";
+  const migrationPercent = stats.totalInventory > 0 ? ((stats.migration / stats.totalInventory) * 100).toFixed(2) : "0.00";
+  const unsoldPercent = stats.totalInventory > 0 ? ((stats.unsold / stats.totalInventory) * 100).toFixed(2) : "0.00";
   const totalForSummary = stats.sales + stats.migration;
 
   // ─── Export ───────────────────────────────────────────────
@@ -192,7 +204,7 @@ export default function SalesPage() {
       ["مبيعات", stats.sales, `${salesPercent}%`],
       ["مايجريشن", stats.migration, `${migrationPercent}%`],
       ["غير مباع", stats.unsold, `${unsoldPercent}%`],
-      ["الإجمالي", stats.totalLines, "100%"],
+      ["الإجمالي", stats.totalInventory, "100%"],
     ];
     const dailySheet = [
       ["التاريخ", "مبيعات", "مايجريشن", "غير مباع", "الإجمالي"],

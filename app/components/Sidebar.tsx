@@ -33,7 +33,7 @@ const iconMap: Record<string, React.ElementType> = {
   "الكشوفات Excel":      FileText,
   "العملاء":             Users,
   "الحالات":             Activity,
-
+  "البحث":             Activity,
   "المدفوعات":             CreditCard,
   "تقرير المبيعات":             Activity,
   "تقرير ارقام الحساب":  CreditCard,
@@ -73,6 +73,7 @@ export default function Sidebar() {
     ...(role !== "viewer" ? [{ name: "الكشوفات ", href: "/collection" }] : []),
     ...(role !== "viewer" ? [{ name: "العملاء", href: "/clients" }] : []),
     ...(role !== "viewer" ? [{ name: "المدفوعات", href: "/payments" }] : []),
+    ...(role !== "viewer" ? [{ name: "البحث", href: "/search" }] : []),
     ...(role !== "viewer" ? [{ name: "الحالات", href: "/status" }] : []),
     ...(role !== "viewer" ? [{ name: "تقرير ارقام الحساب", href: "/reports/accounts" }] : []),
     ...(role !== "viewer" ? [{ name: "تقريرالعموله", href: "/reports/commession" }] : []),

@@ -53,7 +53,7 @@ export default function DashboardPage() {
   const [providersList, setProvidersList] = useState<any[]>([]);
 
   const [kpis, setKpis] = useState({
-    totalLines: 0, sales: 0, migration: 0, unsold: 0,
+    totalLines: 0, totalInventory: 0, sales: 0, migration: 0, unsold: 0,
     totalRevenue: 0, totalClients: 0,
     todayPayments: 0, todayPaymentsAmount: 0,
     linesWithoutClient: 0,
@@ -85,6 +85,12 @@ export default function DashboardPage() {
     return q;
   }
 
+  function applyBaseNoDate(q: any, provId: string) {
+    q = q.or("is_deleted.is.null,is_deleted.eq.false");
+    if (provId) q = q.eq("provider_id", Number(provId));
+    return q;
+  }
+
   async function loadAll(fromDate: string, provId: string) {
     setLoading(true);
     const today = new Date().toISOString().split("T")[0];
@@ -94,6 +100,7 @@ export default function DashboardPage() {
 
     // ─── KPIs ─────────────────────────────────────────────
     const baseFilter = (q: any) => applyBase(q, fromDate, provId);
+    const baseFilterNoDate = (q: any) => applyBaseNoDate(q, provId);
 
     const [
       { count: totalLines },
@@ -102,17 +109,19 @@ export default function DashboardPage() {
       { count: unsoldCount },
       { count: clientsCount },
       { count: linesWithoutClientCount },
+      { count: totalInventoryCount },
     ] = await Promise.all([
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true })),
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
         .not("department_id", "is", null).neq("department_id", MIGRATION_DEPT_ID),
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
         .eq("department_id", MIGRATION_DEPT_ID),
-      baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
+      baseFilterNoDate(supabase.from("lines").select("*", { count: "exact", head: true }))
         .is("department_id", null),
       supabase.from("clients").select("*", { count: "exact", head: true }),
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
         .is("client_id", null).not("department_id", "is", null).neq("department_id", MIGRATION_DEPT_ID),
+      baseFilterNoDate(supabase.from("lines").select("*", { count: "exact", head: true })),
     ]);
 
     // ─── إجمالي الإيرادات ─────────────────────────────────
@@ -135,6 +144,7 @@ export default function DashboardPage() {
 
     setKpis({
       totalLines: totalLines || 0,
+      totalInventory: totalInventoryCount || 0,
       sales: salesCount || 0,
       migration: migrationCount || 0,
       unsold: unsoldCount || 0,
@@ -248,7 +258,7 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  const salesPercent = kpis.totalLines > 0 ? ((kpis.sales / kpis.totalLines) * 100).toFixed(1) : "0";
+  const salesPercent = kpis.totalInventory > 0 ? ((kpis.sales / kpis.totalInventory) * 100).toFixed(1) : "0";
   const migrationPercent = kpis.totalLines > 0 ? ((kpis.migration / kpis.totalLines) * 100).toFixed(1) : "0";
 
   function getActionLabel(type: string) {

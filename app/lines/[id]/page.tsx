@@ -7,8 +7,9 @@ import {
   Pencil, ArrowRight, User, Network, Package, Tag,
   StickyNote, Loader2, Hash, Calendar, Plug, Briefcase,
   Building2, ListTree, Banknote, History, Save,
-  ScanLine, ImagePlus, Upload, CreditCard, X,
+  ScanLine, ImagePlus, Upload, CreditCard, IdCard, MapPin, X,
   CheckCircle2, AlertCircle, Search, ChevronDown,
+  PlusCircle,
 } from "lucide-react";
 
 function SectionTitle({ title, icon: Icon }: { title: string; icon: React.ElementType }) {
@@ -141,6 +142,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
 
   const [providers, setProviders] = useState<any[]>([]);
   const [almanafizList, setAlmanafizList] = useState<any[]>([]);
+  const [heiaatList, setHeiaatList] = useState<any[]>([]);
   const [agentsList, setAgentsList] = useState<any[]>([]);
   const [clientsList, setClientsList] = useState<any[]>([]);
   const [lineStatuses, setLineStatuses] = useState<any[]>([]);
@@ -150,6 +152,9 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   const [accountsList, setAccountsList] = useState<any[]>([]);
   const [departmentName, setDepartmentName] = useState("");
   const [groupName, setGroupName] = useState("");
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [clientForm, setClientForm] = useState({ name: "", national_id: "", address: "", national_id_image: "" });
+  const [savingClient, setSavingClient] = useState(false);
 
   function showToast(message: string, type: "success" | "error") {
     setToast({ message, type });
@@ -173,10 +178,14 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         setOriginalLine(data);
         await loadHistory(p.id);
         if (data.provider_id) await loadPackagesStatusesAccounts(data.provider_id);
-        if (data.almanafiz_id) await loadAlmanafizDetails(data.almanafiz_id);
+        if (data.almanafiz_id) await loadPortDetails("almanafiz", data.almanafiz_id);
+        if (data.heiaat_id) await loadPortDetails("heiaat", data.heiaat_id);
         // أضيفي العميل الحالي في القائمة
         if (data.clients) {
-          setClientsList([data.clients]);
+          setClientsList((prev) => {
+            if (prev.some((c) => c.id === data.clients.id)) return prev;
+            return [...prev, data.clients];
+          });
         }
       }
     }
@@ -186,14 +195,18 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   // ─── Load lookups ─────────────────────────────────────────
   useEffect(() => {
     async function loadLookups() {
-      const [{ data: p }, { data: a }, { data: ag }] = await Promise.all([
+      const [{ data: p }, { data: a }, { data: h }, { data: ag }, { data: cl }] = await Promise.all([
         supabase.from("providers").select("*"),
         supabase.from("almanafiz").select("*, groups(id, name, departments(id, name))"),
+        supabase.from("heiaat").select("*, groups(id, name, departments(id, name))"),
         supabase.from("agents").select("*").eq("is_active", true),
+        supabase.from("clients").select("id, name, national_id").order("name"),
       ]);
       setProviders(p || []);
       setAlmanafizList(a || []);
+      setHeiaatList(h || []);
       setAgentsList(ag || []);
+      setClientsList(cl || []);
     }
     loadLookups();
   }, []);
@@ -235,20 +248,58 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     setAccountsList(acc || []);
   }
 
-  async function loadAlmanafizDetails(almanafizId: number) {
-    const found = almanafizList.find((a) => a.id === almanafizId);
-    if (found) {
-      setGroupName(found.groups?.name || "");
-      setDepartmentName(found.groups?.departments?.name || "");
-    } else {
+  async function loadPortDetails(portType: "almanafiz" | "heiaat", portId: number) {
+    if (portType === "almanafiz") {
+      const found = almanafizList.find((a) => a.id === portId);
+      if (found) {
+        setGroupName(found.groups?.name || "");
+        setDepartmentName(found.groups?.departments?.name || "");
+        return;
+      }
       const { data } = await supabase
         .from("almanafiz").select("*, groups(id, name, departments(id, name))")
-        .eq("id", almanafizId).single();
+        .eq("id", portId).single();
       if (data) {
         setGroupName(data.groups?.name || "");
         setDepartmentName(data.groups?.departments?.name || "");
       }
+      return;
     }
+
+    const found = heiaatList.find((h) => h.id === portId);
+    if (found) {
+      setGroupName(found.groups?.name || "");
+      setDepartmentName(found.groups?.departments?.name || "");
+      return;
+    }
+    const { data } = await supabase
+      .from("heiaat").select("*, groups(id, name, departments(id, name))")
+      .eq("id", portId).single();
+    if (data) {
+      setGroupName(data.groups?.name || "");
+      setDepartmentName(data.groups?.departments?.name || "");
+    }
+  }
+
+  async function saveNewClient() {
+    if (!clientForm.name.trim()) { showToast("اسم العميل مطلوب", "error"); return; }
+    setSavingClient(true);
+    const { data, error } = await supabase
+      .from("clients")
+      .insert({
+        name: clientForm.name.trim(),
+        national_id: clientForm.national_id.trim() || null,
+        address: clientForm.address.trim() || null,
+        national_id_image: clientForm.national_id_image.trim() || null,
+      })
+      .select().single();
+    setSavingClient(false);
+    if (error) { showToast(error.message, "error"); return; }
+    setClientsList((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+    setLine((prev: any) => ({ ...prev, client_id: data.id }));
+    setClientForm({ name: "", national_id: "", address: "", national_id_image: "" });
+    setClientModalOpen(false);
+    showToast("تم إضافة العميل بنجاح", "success");
   }
 
   async function handleProviderChange(providerId: string) {
@@ -267,13 +318,23 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     }));
   }
 
-  async function handleAlmanafizChange(almanafizId: string) {
-    const selected = almanafizList.find((a) => a.id === Number(almanafizId));
+  async function handlePortChange(selection: string) {
+    const [type, id] = selection.split(":");
+    const portId = Number(id);
+    const isAlmanafiz = type === "almanafiz";
+    const isHeiaat = type === "heiaat";
+    const selected = isAlmanafiz
+      ? almanafizList.find((a) => a.id === portId)
+      : isHeiaat
+      ? heiaatList.find((h) => h.id === portId)
+      : null;
+
     setGroupName(selected?.groups?.name || "");
     setDepartmentName(selected?.groups?.departments?.name || "");
     setLine((prev: any) => ({
       ...prev,
-      almanafiz_id: Number(almanafizId),
+      almanafiz_id: isAlmanafiz ? portId : null,
+      heiaat_id: isHeiaat ? portId : null,
       group_id: selected?.groups?.id || null,
       department_id: selected?.groups?.departments?.id || null,
     }));
@@ -308,10 +369,16 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         old: providers.find((p) => p.id === Number(originalLine.provider_id))?.name || "—",
         new: providers.find((p) => p.id === Number(line.provider_id))?.name || "—",
       };
-    if (Number(originalLine.almanafiz_id) !== Number(line.almanafiz_id))
-      changes.almanafiz = {
-        old: almanafizList.find((a) => a.id === Number(originalLine.almanafiz_id))?.name || "—",
-        new: almanafizList.find((a) => a.id === Number(line.almanafiz_id))?.name || "—",
+    const oldPort = originalLine.almanafiz_id
+      ? almanafizList.find((a) => a.id === Number(originalLine.almanafiz_id))
+      : heiaatList.find((h) => h.id === Number(originalLine.heiaat_id));
+    const newPort = line.almanafiz_id
+      ? almanafizList.find((a) => a.id === Number(line.almanafiz_id))
+      : heiaatList.find((h) => h.id === Number(line.heiaat_id));
+    if ((oldPort?.name || "") !== (newPort?.name || ""))
+      changes.port = {
+        old: oldPort?.name || "—",
+        new: newPort?.name || "—",
       };
     if (Number(originalLine.agent_id) !== Number(line.agent_id))
       changes.agent = {
@@ -379,6 +446,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       provider_id:         line.provider_id         ? Number(line.provider_id)         : null,
       account_id:          line.account_id          ? Number(line.account_id)          : null,
       almanafiz_id:        line.almanafiz_id        ? Number(line.almanafiz_id)        : null,
+      heiaat_id:           line.heiaat_id           ? Number(line.heiaat_id)           : null,
       department_id:       line.department_id       ? Number(line.department_id)       : null,
       group_id:            line.group_id            ? Number(line.group_id)            : null,
       agent_id:            line.agent_id            ? Number(line.agent_id)            : null,
@@ -451,12 +519,15 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
             </FieldWrap>
             <FieldWrap label="المنفذ" icon={Plug}>
               <SearchableSelect
-                value={line.almanafiz_id || ""}
-                onChange={(val) => handleAlmanafizChange(val)}
-                options={almanafizList}
-                placeholder="اختر المنفذ"
-                getLabel={(item) => item.name}
-                getValue={(item) => item.id}
+                value={line.almanafiz_id ? `almanafiz:${line.almanafiz_id}` : line.heiaat_id ? `heiaat:${line.heiaat_id}` : ""}
+                onChange={(val) => handlePortChange(val)}
+                options={[
+                  ...almanafizList.map((item) => ({ ...item, portType: "almanafiz" })),
+                  ...heiaatList.map((item) => ({ ...item, portType: "heiaat" })),
+                ]}
+                placeholder="اختر المنفذ أو الهيئة"
+                getLabel={(item) => `${item.name} ${item.portType === "heiaat" ? "(هيئة)" : "(منفذ)"}`}
+                getValue={(item) => `${item.portType}:${item.id}`}
               />
             </FieldWrap>
             <FieldWrap label="سيريال نمبر" icon={ScanLine}>
@@ -483,15 +554,20 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
           <SectionTitle title="العميل" icon={User} />
           <FieldWrap label="اسم العميل" icon={User}>
-            <SearchableSelect
-              value={line.client_id || ""}
-              onChange={(val) => setLine({ ...line, client_id: val })}
-              options={clientsList}
-              placeholder="ابحث باسم العميل أو الرقم القومي..."
-              getLabel={(item) => item.name}
-              getValue={(item) => item.id}
-            />
-         
+            <div className="space-y-3">
+              <SearchableSelect
+                value={line.client_id || ""}
+                onChange={(val) => setLine({ ...line, client_id: val })}
+                options={clientsList}
+                placeholder="ابحث باسم العميل أو الرقم القومي..."
+                getLabel={(item) => item.name}
+                getValue={(item) => item.id}
+              />
+                <button type="button" onClick={() => setClientModalOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-50 border border-blue-200 px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-100 transition">
+                  <PlusCircle className="w-4 h-4" />
+                </button>
+            </div>
           </FieldWrap>
 
         
@@ -651,6 +727,50 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
             <Save className="w-4 h-4" /> حفظ التعديلات
           </button>
         </div>
+
+        {clientModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-lg font-bold text-slate-800">إضافة عميل جديد</h2>
+                <button onClick={() => setClientModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="space-y-4">
+                {[
+                  { label: "اسم العميل *", field: "name", icon: User, placeholder: "اسم العميل" },
+                  { label: "الرقم القومي", field: "national_id", icon: IdCard, placeholder: "الرقم القومي" },
+                  { label: "العنوان", field: "address", icon: MapPin, placeholder: "العنوان" },
+                  { label: "رابط صورة البطاقة", field: "national_id_image", icon: ImagePlus, placeholder: "رابط الصورة" },
+                ].map(({ label, field, icon: Icon, placeholder }) => (
+                  <div key={field}>
+                    <label className="block text-xs text-slate-500 mb-1.5">{label}</label>
+                    <div className="relative">
+                      <Icon className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        value={(clientForm as any)[field]}
+                        onChange={(e) => setClientForm((prev) => ({ ...prev, [field]: e.target.value }))}
+                        placeholder={placeholder}
+                        className="w-full border border-slate-200 bg-slate-50 pr-10 pl-3 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button type="button" onClick={saveNewClient}
+                  disabled={savingClient}
+                  className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-3 rounded-xl font-medium text-sm transition">
+                  {savingClient ? <><Loader2 className="w-4 h-4 animate-spin" /> جاري الحفظ...</> : <><PlusCircle className="w-4 h-4" /> إضافة العميل</>}
+                </button>
+                <button type="button" onClick={() => setClientModalOpen(false)}
+                  className="px-5 py-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium transition">
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* History */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">

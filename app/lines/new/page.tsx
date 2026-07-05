@@ -32,6 +32,7 @@ interface FormState {
   provider_id: string;
   account_id: string;
   almanafiz_id: string;
+  heiaat_id: string;
   department_id: string;
   group_id: string;
   agent_id: string;
@@ -59,6 +60,7 @@ const EMPTY_FORM: FormState = {
   provider_id: "",
   account_id: "",
   almanafiz_id: "",
+  heiaat_id: "",
   department_id: "",
   group_id: "",
   agent_id: "",
@@ -111,6 +113,7 @@ export default function NewLine() {
 
   const [providers, setProviders] = useState<any[]>([]);
   const [almanafizList, setAlmanafizList] = useState<any[]>([]);
+  const [heiaatList, setHeiaatList] = useState<any[]>([]);
   const [agentsList, setAgentsList] = useState<any[]>([]);
   const [clientsList, setClientsList] = useState<any[]>([]);
   const [callsPackages, setCallsPackages] = useState<any[]>([]);
@@ -150,14 +153,16 @@ export default function NewLine() {
 
   useEffect(() => {
     async function loadLookups() {
-      const [{ data: p }, { data: a }, { data: ag }, { data: cl }] = await Promise.all([
+      const [{ data: p }, { data: a }, { data: h }, { data: ag }, { data: cl }] = await Promise.all([
         supabase.from("providers").select("*"),
         supabase.from("almanafiz").select("*, groups(id, name, departments(id, name))"),
+        supabase.from("heiaat").select("*, groups(id, name, departments(id, name))"),
         supabase.from("agents").select("*").eq("is_active", true),
         supabase.from("clients").select("id, name, national_id").order("name"),
       ]);
       setProviders(p || []);
       setAlmanafizList(a || []);
+      setHeiaatList(h || []);
       setAgentsList(ag || []);
       setClientsList(cl || []);
     }
@@ -205,11 +210,20 @@ export default function NewLine() {
     }));
   }
 
-  function handleAlmanafizChange(almanafizId: string) {
-    const selected = almanafizList.find((a) => a.id === Number(almanafizId));
+  function handlePortChange(selection: string) {
+    const [type, id] = selection.split(":");
+    const isAlmanafiz = type === "almanafiz";
+    const isHeiaat = type === "heiaat";
+    const selected = isAlmanafiz
+      ? almanafizList.find((a) => a.id === Number(id))
+      : isHeiaat
+      ? heiaatList.find((h) => h.id === Number(id))
+      : null;
+
     setForm((prev) => ({
       ...prev,
-      almanafiz_id: almanafizId,
+      almanafiz_id: isAlmanafiz ? id : "",
+      heiaat_id: isHeiaat ? id : "",
       group_id: String(selected?.groups?.id || ""),
       department_id: String(selected?.groups?.departments?.id || ""),
       _group_name: selected?.groups?.name || "",
@@ -234,7 +248,7 @@ const [filteredClients, setFilteredClients] = useState<any[]>([]);
 // 2. أضيفي useEffect للبحث
 useEffect(() => {
   if (!clientSearch.trim()) {
-    setFilteredClients([]);
+    setFilteredClients(clientsList);
     return;
   }
   const timeout = setTimeout(async () => {
@@ -246,7 +260,7 @@ useEffect(() => {
     setFilteredClients(data || []);
   }, 300);
   return () => clearTimeout(timeout);
-}, [clientSearch]);
+}, [clientSearch, clientsList]);
 
   async function saveNewClient() {
     if (!clientForm.name.trim()) { showToast("اسم العميل مطلوب", "error"); return; }
@@ -281,8 +295,8 @@ useEffect(() => {
       return "اختاري الشبكة";
     if (!form.account_id)
       return "اختاري الأكونت";
-    if (!form.almanafiz_id)
-      return "اختاري المنفذ";
+    if (!form.almanafiz_id && !form.heiaat_id)
+      return "اختاري المنفذ أو الهيئة";
     if (!form.agent_id)
       return "اختاري المندوب";
     if (!form.line_status_id)
@@ -315,6 +329,7 @@ useEffect(() => {
       provider_id:         form.provider_id         ? Number(form.provider_id)        : null,
       account_id:          form.account_id          ? Number(form.account_id)         : null,
       almanafiz_id:        form.almanafiz_id        ? Number(form.almanafiz_id)       : null,
+      heiaat_id:           form.heiaat_id           ? Number(form.heiaat_id)          : null,
       department_id:       form.department_id       ? Number(form.department_id)      : null,
       group_id:            form.group_id            ? Number(form.group_id)           : null,
       agent_id:            form.agent_id            ? Number(form.agent_id)           : null,
@@ -343,7 +358,9 @@ useEffect(() => {
       action_date: new Date().toISOString(),
       changed_by: localStorage.getItem("full_name") || "Unknown",
       provider_name: providers.find((p) => p.id === Number(form.provider_id))?.name || null,
-      almanafiz_name: almanafizList.find((a) => a.id === Number(form.almanafiz_id))?.name || null,
+      almanafiz_name: form.almanafiz_id
+        ? almanafizList.find((a) => a.id === Number(form.almanafiz_id))?.name || null
+        : heiaatList.find((h) => h.id === Number(form.heiaat_id))?.name || null,
       agent_name: agentsList.find((a) => a.id === Number(form.agent_id))?.name || null,
       account_no: accountsList.find((a) => a.id === Number(form.account_id))?.account_no || null,
       line_status_name: lineStatuses.find((s) => s.id === Number(form.line_status_id))?.name || null,
@@ -424,11 +441,14 @@ useEffect(() => {
               <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
                 <Plug className="w-3.5 h-3.5" /> المنفذ <span className="text-red-500">*</span>
               </label>
-              <select value={form.almanafiz_id} onChange={(e) => handleAlmanafizChange(e.target.value)}
+              <select value={form.almanafiz_id ? `almanafiz:${form.almanafiz_id}` : form.heiaat_id ? `heiaat:${form.heiaat_id}` : ""}
+                onChange={(e) => handlePortChange(e.target.value)}
                 className="w-full border border-slate-200 bg-slate-50 text-slate-900 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm">
-                <option value="">اختر المنفذ</option>
-                {almanafizList.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
+                <option value="">اختر المنفذ أو الهيئة</option>
+                {[...almanafizList.map((item) => ({ ...item, portType: "almanafiz" })), ...heiaatList.map((item) => ({ ...item, portType: "heiaat" }))].map((item) => (
+                  <option key={`${item.portType}:${item.id}`} value={`${item.portType}:${item.id}`}>
+                    {item.name} {item.portType === "heiaat" ? "(هيئة)" : "(منفذ)"}
+                  </option>
                 ))}
               </select>
             </div>

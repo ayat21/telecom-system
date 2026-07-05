@@ -5,10 +5,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Download, FileSpreadsheet, Trash2, RefreshCw, PlusCircle,
-  Loader2, CheckCircle2, XCircle, AlertTriangle, Database, ChevronDown,
+  Loader2, CheckCircle2, XCircle, AlertTriangle, Database, ChevronDown, User,
 } from "lucide-react";
 
-type ImportType = "full" | "bulk_update" | "bulk_delete" | "add_column";
+type ImportType = "full" | "bulk_update" | "bulk_delete" | "add_column" | "update_clients";
 
 interface ImportResult {
   status: "success" | "error";
@@ -23,6 +23,9 @@ interface RowError {
 }
 
 const UPDATABLE_COLUMNS: { key: string; label: string }[] = [
+  { key: "client_name", label: "اسم العميل" },        // ← جديد
+  { key: "national_id", label: "الرقم القومي" },       // ← جديد
+  { key: "address", label: "العنوان" },                // ← جديد
   { key: "account_no", label: "رقم الأكونت (اسم)" },
   { key: "customer_date_real", label: "تاريخ العميل" },
   { key: "serial_number", label: "الرقم التسلسلي" },
@@ -76,72 +79,54 @@ function resolveRowSync(
   const rowErrors: string[] = [];
   const number = str(row["number"]);
 
-  // Provider — مطلوب
   const providerName = str(row["provider_name"]);
   const provider_id = providerName ? lookupId(cache, "providers", providerName) : null;
-  if (!providerName)
-    rowErrors.push(`عمود provider_name فاضي أو ناقص`);
-  else if (!provider_id)
-    rowErrors.push(`الشبكة "${providerName}" غير موجودة`);
+  if (!providerName) rowErrors.push(`عمود provider_name فاضي أو ناقص`);
+  else if (!provider_id) rowErrors.push(`الشبكة "${providerName}" غير موجودة`);
 
-  // Account
   const accountNo = str(row["account_no"]);
   const account_id = accountNo && provider_id
     ? cache.get(`accounts:${accountNo.toLowerCase()}_${provider_id}`) ?? null
     : null;
 
-  // Almanafiz أو Heiaat — مطلوب
   const almanafizName = str(row["almanafiz_name"]);
   let almanafiz_id: number | null = null;
   let heiaat_id: number | null = null;
   let group_id: number | null = null;
   let department_id: number | null = null;
 
- if (almanafizName) {
-  // دور في almanafiz الأول
-  const foundAlmanafiz = lookupId(cache, "almanafiz", almanafizName);
-  if (foundAlmanafiz) {
-    almanafiz_id = foundAlmanafiz;
-    const found = refData.almanafizData.find((a: any) => a.id === almanafiz_id);
-    if (found) {
-      group_id = found.group_id;
-      department_id = found.groups?.department_id || null;
-    }
-  } else {
-    // دور في heiaat
-    const foundHeiaat = lookupId(cache, "heiaat", almanafizName);
-    if (foundHeiaat) {
-      heiaat_id = foundHeiaat;
-      const found = refData.heiaatData.find((h: any) => h.id === heiaat_id);
-      if (found) group_id = found.group_id;
+  if (almanafizName) {
+    const foundAlmanafiz = lookupId(cache, "almanafiz", almanafizName);
+    if (foundAlmanafiz) {
+      almanafiz_id = foundAlmanafiz;
+      const found = refData.almanafizData.find((a: any) => a.id === almanafiz_id);
+      if (found) {
+        group_id = found.group_id;
+        department_id = found.groups?.department_id || null;
+      }
     } else {
-      // لو مش موجود في الاتنين — error
-      rowErrors.push(`المنفذ/الهيئة "${almanafizName}" غير موجود في النظام`);
+      const foundHeiaat = lookupId(cache, "heiaat", almanafizName);
+      if (foundHeiaat) {
+        heiaat_id = foundHeiaat;
+        const found = refData.heiaatData.find((h: any) => h.id === heiaat_id);
+        if (found) group_id = found.group_id;
+      } else {
+        rowErrors.push(`المنفذ/الهيئة "${almanafizName}" غير موجود في النظام`);
+      }
     }
   }
-}
 
-  // Agent — مطلوب
   const agentName = str(row["agent_name"]);
   const agent_id = agentName ? lookupId(cache, "agents", agentName) : null;
-  if (!agentName)
-    rowErrors.push(`عمود agent_name فاضي أو ناقص`);
-  else if (!agent_id)
-    rowErrors.push(`المندوب "${agentName}" غير موجود`);
+  if (!agentName) rowErrors.push(`عمود agent_name فاضي أو ناقص`);
+  else if (!agent_id) rowErrors.push(`المندوب "${agentName}" غير موجود`);
 
-  // Client — من cache بس
   const clientName = str(row["client_name"]);
   const clientNationalId = str(row["national_id"]);
   let client_id: number | null = null;
+  if (clientNationalId) client_id = cache.get(`clients_nid:${clientNationalId.toLowerCase()}`) ?? null;
+  if (!client_id && clientName) client_id = cache.get(`clients:${clientName.toLowerCase()}`) ?? null;
 
-  if (clientNationalId) {
-    client_id = cache.get(`clients_nid:${clientNationalId.toLowerCase()}`) ?? null;
-  }
-  if (!client_id && clientName) {
-    client_id = cache.get(`clients:${clientName.toLowerCase()}`) ?? null;
-  }
-
-  // Line Status
   const lineStatusName = str(row["line_status_name"]);
   let line_status_id: number | null = null;
   if (lineStatusName && provider_id) {
@@ -149,11 +134,9 @@ function resolveRowSync(
       (s: any) => s.name.toLowerCase() === lineStatusName.toLowerCase() && s.provider_id === provider_id
     );
     line_status_id = found?.id ?? null;
-    if (!line_status_id)
-      rowErrors.push(`حالة الخط "${lineStatusName}" غير موجودة للشبكة "${providerName}"`);
+    if (!line_status_id) rowErrors.push(`حالة الخط "${lineStatusName}" غير موجودة للشبكة "${providerName}"`);
   }
 
-  // Calls Package
   const callsPackageName = str(row["calls_package_name"]);
   let calls_package_id: number | null = null;
   if (callsPackageName && provider_id) {
@@ -161,11 +144,9 @@ function resolveRowSync(
       (p: any) => p.package_name.toLowerCase() === callsPackageName.toLowerCase() && p.provider_id === provider_id
     );
     calls_package_id = found?.id ?? null;
-    if (!calls_package_id)
-      rowErrors.push(`باقة المكالمات "${callsPackageName}" غير موجودة`);
+    if (!calls_package_id) rowErrors.push(`باقة المكالمات "${callsPackageName}" غير موجودة`);
   }
 
-  // Internet Package
   const internetPackageName = str(row["internet_package_name"]);
   let internet_package_id: number | null = null;
   if (internetPackageName && provider_id) {
@@ -173,11 +154,9 @@ function resolveRowSync(
       (p: any) => p.package_name.toLowerCase() === internetPackageName.toLowerCase() && p.provider_id === provider_id
     );
     internet_package_id = found?.id ?? null;
-    if (!internet_package_id)
-      rowErrors.push(`باقة الإنترنت "${internetPackageName}" غير موجودة`);
+    if (!internet_package_id) rowErrors.push(`باقة الإنترنت "${internetPackageName}" غير موجودة`);
   }
 
-  // Line Extension
   const lineExtensionName = str(row["line_extension_name"]);
   let line_extension_id: number | null = null;
   if (lineExtensionName && provider_id) {
@@ -185,12 +164,10 @@ function resolveRowSync(
       (p: any) => p.extension_name.toLowerCase() === lineExtensionName.toLowerCase() && p.provider_id === provider_id
     );
     line_extension_id = found?.id ?? null;
-    if (!line_extension_id)
-      rowErrors.push(`الإضافة "${lineExtensionName}" غير موجودة`);
+    if (!line_extension_id) rowErrors.push(`الإضافة "${lineExtensionName}" غير موجودة`);
   }
 
-  if (rowErrors.length > 0)
-    errors.push({ row: rowIndex + 2, number, errors: rowErrors });
+  if (rowErrors.length > 0) errors.push({ row: rowIndex + 2, number, errors: rowErrors });
 
   const hasSim = str(row["has_sim"]);
   const has_sim = hasSim === "true" || hasSim === "1" || hasSim === "نعم";
@@ -207,9 +184,9 @@ function resolveRowSync(
     department_id, group_id,
     agent_id, line_status_id,
     calls_package_id, internet_package_id, line_extension_id,
-    calls_package_price:    Number(row["calls_package_price"] || 0),
+    calls_package_price: Number(row["calls_package_price"] || 0),
     internet_package_price: Number(row["internet_package_price"] || 0),
-    line_extension_price:   Number(row["line_extension_price"] || 0),
+    line_extension_price: Number(row["line_extension_price"] || 0),
     total_price:
       Number(row["calls_package_price"] || 0) +
       Number(row["internet_package_price"] || 0) +
@@ -286,8 +263,7 @@ export default function ImportPage() {
     (agents || []).forEach((x) => cache.set(`agents:${x.name.toLowerCase()}`, x.id));
     (clients || []).forEach((x) => {
       cache.set(`clients:${x.name.toLowerCase()}`, x.id);
-      if (x.national_id)
-        cache.set(`clients_nid:${x.national_id.toLowerCase()}`, x.id);
+      if (x.national_id) cache.set(`clients_nid:${x.national_id.toLowerCase()}`, x.id);
     });
     (accounts || []).forEach((x) =>
       cache.set(`accounts:${x.account_no.toLowerCase()}_${x.provider_id}`, x.id)
@@ -366,41 +342,32 @@ export default function ImportPage() {
           return;
         }
 
-        // ─── أضيفي العملاء الجدد ─────────────────────────────
-        const normalize = (s:string)=>s.trim().replace(/\s+/g," ").toLowerCase();
-
-        const newClientNames=[...new Set(
-          records.filter(r=>r._client_name).map(r=>normalize(r._client_name))
+        // أضيفي العملاء الجدد
+        const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+        const newClientNames = [...new Set(
+          records.filter(r => r._client_name).map(r => normalize(r._client_name))
         )];
 
-        if(newClientNames.length){
+        if (newClientNames.length) {
           setProgressText(`جارٍ معالجة ${newClientNames.length} عميل...`);
-
-          const {data:allClients}=await supabase.from("clients").select("id,name");
-
-          const existingMap=new Map<string,number>();
-          (allClients||[]).forEach(c=>existingMap.set(normalize(c.name),c.id));
-
-          const toInsert=newClientNames.filter(n=>!existingMap.has(n));
-
-          for(let i=0;i<toInsert.length;i+=500){
-            const {data}=await supabase.from("clients")
-              .insert(toInsert.slice(i,i+500).map(name=>({name})))
-              .select("id,name");
-
-            (data||[]).forEach(c=>existingMap.set(normalize(c.name),c.id));
+          const { data: allClients } = await supabase.from("clients").select("id, name");
+          const existingMap = new Map<string, number>();
+          (allClients || []).forEach(c => existingMap.set(normalize(c.name), c.id));
+          const toInsert = newClientNames.filter(n => !existingMap.has(n));
+          for (let i = 0; i < toInsert.length; i += 500) {
+            const { data } = await supabase.from("clients")
+              .insert(toInsert.slice(i, i + 500).map(name => ({ name })))
+              .select("id, name");
+            (data || []).forEach(c => existingMap.set(normalize(c.name), c.id));
           }
-
-          records.forEach(r=>{
-            if(r._client_name){
-              r.client_id=existingMap.get(normalize(r._client_name))??null;
-            }
+          records.forEach(r => {
+            if (r._client_name) r.client_id = existingMap.get(normalize(r._client_name)) ?? null;
           });
         }
 
         setProgressPercent(35);
 
-        // ─── أضيفي الأكونتات الجديدة ──────────────────────────
+        // أضيفي الأكونتات الجديدة
         const newAccounts = [...new Map(
           records
             .filter((r) => r.account_no && r.provider_id && !r.account_id)
@@ -421,7 +388,6 @@ export default function ImportPage() {
 
         setProgressPercent(40);
 
-        // ─── ارفعي لـ Supabase ────────────────────────────────
         const unique = Array.from(new Map(records.map((r) => [r.number, r])).values())
           .map(({ _hasErrors, _client_name, _client_national_id, ...rest }) => rest);
         const dupes = records.length - unique.length;
@@ -429,9 +395,6 @@ export default function ImportPage() {
         setProgressText(`جارٍ رفع ${unique.length.toLocaleString()} سجل...`);
         for (let i = 0; i < unique.length; i += 500) {
           const batch = unique.slice(i, i + 500);
-          console.log(
-  records.filter(r => r.client_id == null).slice(0,20)
-);
           const { error } = await supabase.from("lines").upsert(batch, { onConflict: "number" });
           if (error) throw new Error(error.message);
           const done = Math.min(i + 500, unique.length);
@@ -448,16 +411,20 @@ export default function ImportPage() {
 
       // ─── تغيير مجمع ───────────────────────────────────────
       else if (importType === "bulk_update") {
-        setProgressText("جارٍ تحميل الجداول المرجعية...");
-        const refData = await loadReferenceTables();
-
         const NAME_COLS = [
           "provider_name", "almanafiz_name", "agent_name", "line_status_name",
           "calls_package_name", "internet_package_name", "line_extension_name", "account_no",
         ];
+        const CLIENT_COLS = ["client_name", "national_id", "address"];
         const hasNameCols = selectedColumns.some((c) => NAME_COLS.includes(c));
+        const hasClientCols = selectedColumns.some((c) => CLIENT_COLS.includes(c));
 
+        // جيبي refData لو في name cols
+        let refData: any = null;
         if (hasNameCols) {
+          setProgressText("جارٍ تحميل الجداول المرجعية...");
+          refData = await loadReferenceTables();
+
           setProgressText(`جارٍ التحقق من ${rows.length.toLocaleString()} سجل...`);
           const allErrors: RowError[] = [];
           for (let i = 0; i < rows.length; i++) {
@@ -481,9 +448,25 @@ export default function ImportPage() {
           }
         }
 
+        // ─── جيبي client_ids مرة واحدة ────────────────────────
+        const clientIdMap = new Map<string, number>();
+        if (hasClientCols) {
+          setProgressText("جارٍ تحميل بيانات العملاء...");
+          const allNumbers = rows.map(r => String(r["number"] || "").trim()).filter(Boolean);
+          for (let i = 0; i < allNumbers.length; i += 1000) {
+            const { data } = await supabase
+              .from("lines")
+              .select("number, client_id")
+              .in("number", allNumbers.slice(i, i + 1000));
+            (data || []).forEach((l: any) => {
+              if (l.client_id) clientIdMap.set(l.number, l.client_id);
+            });
+          }
+        }
+
         setProgressText(`جارٍ تحديث ${rows.length.toLocaleString()} سجل...`);
-        for (let i = 0; i < rows.length; i += 100) {
-          const batch = rows.slice(i, i + 100);
+        for (let i = 0; i < rows.length; i += 500) {
+          const batch = rows.slice(i, i + 500);
           await Promise.all(batch.map(async (row) => {
             const number = String(row["number"] || "").trim();
             if (!number) return;
@@ -492,37 +475,72 @@ export default function ImportPage() {
               const resolved = resolveRowSync(row, 0, refData.cache, refData, []);
               for (const col of selectedColumns) {
                 switch (col) {
-                  case "provider_name":         updates.provider_id = resolved.provider_id; break;
-                  case "account_no":            updates.account_id = resolved.account_id; break;
+                  case "provider_name": updates.provider_id = resolved.provider_id; break;
+                  case "account_no": updates.account_id = resolved.account_id; break;
                   case "almanafiz_name":
                     updates.almanafiz_id = resolved.almanafiz_id;
                     updates.heiaat_id = resolved.heiaat_id;
                     updates.group_id = resolved.group_id;
                     updates.department_id = resolved.department_id;
                     break;
-                  case "agent_name":            updates.agent_id = resolved.agent_id; break;
-                  case "line_status_name":      updates.line_status_id = resolved.line_status_id; break;
-                  case "calls_package_name":    updates.calls_package_id = resolved.calls_package_id; break;
+                  case "agent_name": updates.agent_id = resolved.agent_id; break;
+                  case "line_status_name": updates.line_status_id = resolved.line_status_id; break;
+                  case "calls_package_name": updates.calls_package_id = resolved.calls_package_id; break;
                   case "internet_package_name": updates.internet_package_id = resolved.internet_package_id; break;
-                  case "line_extension_name":   updates.line_extension_id = resolved.line_extension_id; break;
-                  case "calls_package_price":   updates.calls_package_price = Number(row[col] || 0); break;
+                  case "line_extension_name": updates.line_extension_id = resolved.line_extension_id; break;
+                  case "calls_package_price": updates.calls_package_price = Number(row[col] || 0); break;
                   case "internet_package_price": updates.internet_package_price = Number(row[col] || 0); break;
-                  case "line_extension_price":  updates.line_extension_price = Number(row[col] || 0); break;
+                  case "line_extension_price": updates.line_extension_price = Number(row[col] || 0); break;
                   case "has_sim": {
                     const v = String(row[col] || "").trim();
                     updates.has_sim = v === "true" || v === "1" || v === "نعم";
                     break;
                   }
+                  case "client_name":
+                  case "national_id":
+                  case "address":
+                    break; // بيتعالجوا في clients
                   default: updates[col] = row[col] || null;
                 }
               }
             } else {
-              for (const col of selectedColumns) updates[col] = row[col] || null;
+              for (const col of selectedColumns) {
+                if (!CLIENT_COLS.includes(col)) updates[col] = row[col] || null;
+              }
             }
-            await supabase.from("lines").update(updates).eq("number", number);
+
+            // حدّثي lines لو في updates
+            if (Object.keys(updates).length > 0) {
+              await supabase.from("lines").update(updates).eq("number", number);
+            }
+
+            // حدّثي clients من الـ map
+            if (hasClientCols) {
+              const clientFields: Record<string, any> = {};
+              if (selectedColumns.includes("client_name") && String(row["client_name"] || "").trim())
+                clientFields.name = String(row["client_name"]).trim();
+              if (selectedColumns.includes("national_id") && String(row["national_id"] || "").trim())
+                clientFields.national_id = String(row["national_id"]).trim();
+              if (selectedColumns.includes("address") && String(row["address"] || "").trim())
+                clientFields.address = String(row["address"]).trim();
+
+      if (Object.keys(clientFields).length > 0) {
+  const clientId = clientIdMap.get(number);
+  if (clientId) {
+    if (clientFields.national_id) {
+      await supabase
+        .from("clients")
+        .update({ national_id: null })
+        .eq("national_id", clientFields.national_id)
+        .neq("id", clientId);
+    }
+    await supabase.from("clients").update(clientFields).eq("id", clientId);
+  }
+}
+            }
           }));
-          setProgressPercent(Math.round(((i + 100) / rows.length) * 100));
-          setProgressText(`تم تحديث ${Math.min(i + 100, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
+          setProgressPercent(Math.round(((i + 500) / rows.length) * 100));
+          setProgressText(`تم تحديث ${Math.min(i + 500, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
         }
 
         setResult({
@@ -630,6 +648,57 @@ export default function ImportPage() {
         });
       }
 
+      // ─── تحديث بيانات العملاء ─────────────────────────────
+      else if (importType === "update_clients") {
+        setProgressText(`جارٍ معالجة ${rows.length.toLocaleString()} سجل...`);
+
+        let updated = 0;
+        let notFound = 0;
+        let noUpdates = 0;
+
+        for (let i = 0; i < rows.length; i += 100) {
+          const batch = rows.slice(i, i + 100);
+
+          await Promise.all(batch.map(async (row) => {
+            const number = String(row["number"] || "").trim();
+            if (!number) return;
+
+            // جيبي الـ client_id من الخط
+            const { data: lineData } = await supabase
+              .from("lines")
+              .select("client_id")
+              .eq("number", number)
+              .single();
+
+            if (!lineData?.client_id) { notFound++; return; }
+
+            // حضّري التحديثات
+            const updates: Record<string, any> = {};
+            const clientName = String(row["client_name"] || "").trim();
+            const nationalId = String(row["national_id"] || "").trim();
+            const address = String(row["address"] || "").trim();
+
+            if (clientName) updates.name = clientName;
+            if (nationalId) updates.national_id = nationalId;
+            if (address) updates.address = address;
+
+            if (Object.keys(updates).length === 0) { noUpdates++; return; }
+
+            await supabase.from("clients").update(updates).eq("id", lineData.client_id);
+            updated++;
+          }));
+
+          setProgressPercent(Math.round(((i + 100) / rows.length) * 100));
+          setProgressText(`تم معالجة ${Math.min(i + 100, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
+        }
+
+        setResult({
+          status: "success",
+          message: "تم تحديث بيانات العملاء بنجاح ✅",
+          details: `تم تحديث: ${updated} | بدون عميل: ${notFound} | بدون تغيير: ${noUpdates}`,
+        });
+      }
+
     } catch (err) {
       setResult({
         status: "error",
@@ -648,6 +717,7 @@ export default function ImportPage() {
     { key: "bulk_update" as ImportType, icon: <RefreshCw className="w-4 h-4" />, title: "تغيير مجمع", desc: "تحديث أعمدة محددة لخطوط موجودة" },
     { key: "bulk_delete" as ImportType, icon: <Trash2 className="w-4 h-4" />, title: "إلغاء مجمع", desc: "تعليم خطوط كمحذوفة" },
     { key: "add_column" as ImportType, icon: <PlusCircle className="w-4 h-4" />, title: "رفع عمود جديد", desc: "إضافة بيانات عمود لخطوط موجودة" },
+    { key: "update_clients" as ImportType, icon: <User className="w-4 h-4" />, title: "تحديث بيانات العملاء", desc: "تحديث الاسم والرقم القومي والعنوان" },
   ];
 
   return (
@@ -751,6 +821,9 @@ export default function ImportPage() {
               {importType === "bulk_update" && <p>الأعمدة: <span className="font-mono">number</span> + الأعمدة المحددة فوق</p>}
               {importType === "bulk_delete" && <p>الأعمدة: <span className="font-mono">number</span> فقط</p>}
               {importType === "add_column" && <p>الأعمدة: <span className="font-mono">number</span> + العمود الجديد بالاسم</p>}
+              {importType === "update_clients" && (
+                <p>الأعمدة: <span className="font-mono">number</span> + <span className="font-mono">client_name</span> (اختياري) + <span className="font-mono">national_id</span> (اختياري) + <span className="font-mono">address</span> (اختياري)</p>
+              )}
             </div>
           </div>
 
