@@ -47,6 +47,7 @@ function KpiCard({ label, value, sub, icon: Icon, iconBg, iconColor, valueColor 
 export default function DashboardPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [authorized, setAuthorized] = useState(false);
   const [fullName, setFullName] = useState("");
   const [filterFromDate, setFilterFromDate] = useState("");
   const [filterProvider, setFilterProvider] = useState("");
@@ -71,6 +72,7 @@ export default function DashboardPage() {
     const name = localStorage.getItem("full_name") || "";
     setFullName(name);
     if (!role) { router.replace("/login"); return; }
+    setAuthorized(true);
 
     // جيبي الشبكات
     supabase.from("providers").select("id, name").then(({ data }) => setProvidersList(data || []));
@@ -269,6 +271,8 @@ export default function DashboardPage() {
       default: return { label: type, color: "bg-slate-100 text-slate-700" };
     }
   }
+
+  if (!authorized) return null;
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-5 md:p-8">
