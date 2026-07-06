@@ -25,10 +25,14 @@ export default function LoginPage() {
         password,
       });
 
-      if (error) {
-        setError("البريد الإلكتروني أو كلمة المرور غلط");
-        return;
-      }
+     if (error) {
+  console.log(error);
+  console.log(error.message);
+  console.log(error.status);
+
+  setError(error.message);
+  return;
+}
 
       const { data: userData } = await supabase
         .from("users")

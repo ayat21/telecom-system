@@ -1,421 +1,462 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
-  FileText, Filter, Calendar, Network, Loader2,
-  Download, FileSpreadsheet, X,
+  BarChart2, Loader2, Download, PhoneCall, CheckCircle2,
+  XCircle, DollarSign, TrendingUp, Award, RefreshCw,
 } from "lucide-react";
 
-interface LineRow {
-  id: number;
-  number: string;
-  client_name: string;
-  report_note: string;
-  total_price: number;
+function getProviderColor(name: string) {
+  const lower = (name || "").toLowerCase();
+  if (lower.includes("etisalat") || lower.includes("اتصالات")) return "#22c55e";
+  if (lower.includes("orange") || lower.includes("اورنج")) return "#f97316";
+  if (lower.includes("vodafone") || lower.includes("فودافون")) return "#ef4444";
+  return "#3b82f6";
 }
 
-export default function KashfPage() {
+export default function CollectionDashboardPage() {
   const router = useRouter();
   const [authorized, setAuthorized] = useState(false);
-
-  const [almanafizList, setAlmanafizList] = useState<any[]>([]);
-  const [almanafizSearch, setAlmanafizSearch] = useState("");
-  const [showAlmanafizDropdown, setShowAlmanafizDropdown] = useState(false);
-  const almanafizRef = useRef<HTMLDivElement>(null);
-
-  const [filterAlmanafiz, setFilterAlmanafiz] = useState("");
-  const [filterMonth, setFilterMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
-
-  const [lines, setLines] = useState<LineRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
 
-  const selectedAlmanafiz = almanafizList.find((a) => String(a.id) === filterAlmanafiz);
-  const totalLines = lines.length;
-  const totalAmount = lines.reduce((s, l) => s + (l.total_price || 0), 0);
+  // Filters
+  const [almanafizList, setAlmanafizList] = useState<any[]>([]);
+  const [heiaatList, setHeiaatList] = useState<any[]>([]);
+  const [departmentsList, setDepartmentsList] = useState<any[]>([]);
+  const [filterPlace, setFilterPlace] = useState("");       // "a_5" أو "h_3"
+  const [filterDepartment, setFilterDepartment] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
 
-  const filteredAlmanafiz = almanafizSearch.trim()
-    ? almanafizList.filter((a) => a.name.includes(almanafizSearch))
-    : almanafizList;
+  // Data
+  const [providerStats, setProviderStats] = useState<any[]>([]);
+  const [totals, setTotals] = useState({
+    totalLines: 0,
+    paidLines: 0,
+    unpaidLines: 0,
+    totalRevenue: 0,     // المطلوب
+    totalCollected: 0,   // المحصل
+  });
+  const [topAgent, setTopAgent] = useState<{ name: string; count: number; revenue: number } | null>(null);
+  const [unpaidList, setUnpaidList] = useState<any[]>([]);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   useEffect(() => {
     const role = localStorage.getItem("role");
     if (!role) { router.replace("/login"); return; }
     setAuthorized(true);
+
+    // جيبي المنافذ والهيئات والأقسام
+    Promise.all([
+      supabase.from("almanafiz").select("id, name").order("name"),
+      supabase.from("heiaat").select("id, name").order("name"),
+      supabase.from("departments").select("id, name").order("name"),
+    ]).then(([{ data: a }, { data: h }, { data: d }]) => {
+      setAlmanafizList(a || []);
+      setHeiaatList(h || []);
+      setDepartmentsList(d || []);
+    });
   }, []);
 
-  useEffect(() => {
-    supabase
-      .from("almanafiz")
-      .select("id, name")
-      .order("name")
-      .then(({ data }) => setAlmanafizList(data || []));
-  }, []);
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (almanafizRef.current && !almanafizRef.current.contains(e.target as Node))
-        setShowAlmanafizDropdown(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
+  // ─── Load data ────────────────────────────────────────────
   async function loadData() {
-    if (!filterAlmanafiz) { alert("اختاري المنفذ أو الهيئة"); return; }
-    if (!filterMonth) { alert("اختاري الشهر"); return; }
-
+    if (!filterMonth) { alert("اختاري الشهر الأول"); return; }
     setLoading(true);
-    setSearched(true);
+    setDataLoaded(false);
 
-    const [year, month] = filterMonth.split("-");
-    const fromDate = `${year}-${month}-01`;
-    const lastDay = new Date(Number(year), Number(month), 0).getDate();
-    const toDate = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+    // ─── جيبي الخطوط حسب الفلاتر ──────────────────────────
+    function buildQuery() {
+      let q = supabase
+        .from("lines")
+        .select(`
+          id, number, total_price, provider_id, agent_id,
+          providers(name), agents(name), clients(name)
+        `)
+        .or("is_deleted.is.null,is_deleted.eq.false");
 
-    const { data, error } = await supabase
-      .from("lines")
-      .select(`id, number, total_price, report_note, clients(name)`)
-      .eq("almanafiz_id", Number(filterAlmanafiz))
-      .gte("customer_date_real", fromDate)
-      .lte("customer_date_real", toDate)
-      .or("is_deleted.is.null,is_deleted.eq.false")
-      .order("id", { ascending: true });
+      if (filterPlace) {
+        const [type, id] = filterPlace.split("_");
+        if (type === "a") q = q.eq("almanafiz_id", Number(id));
+        else q = q.eq("heiaat_id", Number(id));
+      }
 
-    setLoading(false);
-    if (error) { alert(error.message); return; }
+      if (filterDepartment) {
+        q = q.eq("department_id", Number(filterDepartment));
+      }
 
-    setLines(
-      (data || []).map((l: any) => ({
-        id: l.id,
-        number: l.number,
-        client_name: l.clients?.name || "—",
-        report_note: l.report_note || "—",
-        total_price: l.total_price || 0,
-      }))
+      return q;
+    }
+
+    // جيبي كل الخطوط في batches
+    const allLines: any[] = [];
+    let offset = 0;
+    while (true) {
+      const { data } = await buildQuery().range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      allLines.push(...data);
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
+
+    // ─── جيبي السدادات للشهر ده ──────────────────────────
+    const paidNumbers = new Set<string>();
+    const paidAmounts = new Map<string, number>();
+    let pOffset = 0;
+    while (true) {
+      const { data } = await supabase
+        .from("payments")
+        .select("line_number, amount")
+        .eq("payment_month", filterMonth)
+        .range(pOffset, pOffset + 999);
+      if (!data || data.length === 0) break;
+      data.forEach((p) => {
+        if (p.line_number) {
+          paidNumbers.add(p.line_number);
+          paidAmounts.set(p.line_number, (paidAmounts.get(p.line_number) || 0) + (p.amount || 0));
+        }
+      });
+      if (data.length < 1000) break;
+      pOffset += 1000;
+    }
+
+    // ─── احسبي الإحصائيات ─────────────────────────────────
+    const provMap = new Map<string, {
+      total: number; paid: number; unpaid: number;
+      revenue: number; collected: number; color: string;
+    }>();
+
+    let totalRevenue = 0;
+    let totalCollected = 0;
+    let paidCount = 0;
+    const agentMap = new Map<string, { count: number; revenue: number }>();
+    const unpaid: any[] = [];
+
+    allLines.forEach((line: any) => {
+      const provName = line.providers?.name || "غير محدد";
+      if (!provMap.has(provName)) {
+        provMap.set(provName, {
+          total: 0, paid: 0, unpaid: 0, revenue: 0, collected: 0,
+          color: getProviderColor(provName),
+        });
+      }
+      const prov = provMap.get(provName)!;
+      prov.total++;
+      prov.revenue += line.total_price || 0;
+      totalRevenue += line.total_price || 0;
+
+      const isPaid = paidNumbers.has(line.number);
+      if (isPaid) {
+        prov.paid++;
+        paidCount++;
+        const collected = paidAmounts.get(line.number) || 0;
+        prov.collected += collected;
+        totalCollected += collected;
+      } else {
+        prov.unpaid++;
+        unpaid.push({
+          number: line.number,
+          client: line.clients?.name || "—",
+          provider: provName,
+          amount: line.total_price || 0,
+        });
+      }
+
+      // أحسن بائع
+      const agentName = line.agents?.name;
+      if (agentName) {
+        const cur = agentMap.get(agentName) || { count: 0, revenue: 0 };
+        agentMap.set(agentName, {
+          count: cur.count + 1,
+          revenue: cur.revenue + (line.total_price || 0),
+        });
+      }
+    });
+
+    // أحسن بائع
+    const sortedAgents = [...agentMap.entries()].sort((a, b) => b[1].count - a[1].count);
+    setTopAgent(sortedAgents.length > 0
+      ? { name: sortedAgents[0][0], ...sortedAgents[0][1] }
+      : null);
+
+    setProviderStats(
+      [...provMap.entries()].map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.total - a.total)
     );
+
+    setTotals({
+      totalLines: allLines.length,
+      paidLines: paidCount,
+      unpaidLines: allLines.length - paidCount,
+      totalRevenue,
+      totalCollected,
+    });
+
+    setUnpaidList(unpaid);
+    setDataLoaded(true);
+    setLoading(false);
   }
 
-  // ─── PDF ──────────────────────────────────────────────────
-  function printPDF() {
-    const [year, month] = filterMonth.split("-");
-    const monthNames = [
-      "يناير", "فبراير", "مارس", "إبريل", "مايو", "يونيو",
-      "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
-    ];
-    const monthName = monthNames[Number(month) - 1];
-
-    const html = `
-      <!DOCTYPE html>
-      <html dir="rtl" lang="ar">
-      <head>
-        <meta charset="UTF-8" />
-        <title>كشف حساب - ${selectedAlmanafiz?.name}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: Arial, sans-serif; font-size: 13px; color: #1e293b; padding: 30px; }
-          .header { text-align: center; margin-bottom: 24px; border-bottom: 2px solid #1e40af; padding-bottom: 16px; }
-          .header h1 { font-size: 22px; color: #1e40af; margin-bottom: 6px; font-weight: bold; }
-          .header p { font-size: 14px; color: #64748b; }
-          .summary { display: flex; gap: 16px; margin-bottom: 20px; }
-          .summary-card { flex: 1; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; text-align: center; }
-          .summary-card .label { font-size: 11px; color: #64748b; margin-bottom: 6px; }
-          .summary-card .value { font-size: 22px; font-weight: bold; color: #1e40af; }
-          .summary-card .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-          table { width: 100%; border-collapse: collapse; }
-          th { background: #1e40af; color: white; padding: 10px 8px; text-align: right; font-size: 12px; font-weight: bold; }
-          td { padding: 9px 8px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }
-          tr:nth-child(even) td { background: #f8fafc; }
-          tfoot td { background: #eff6ff; color: #1e40af; font-weight: bold; border-top: 2px solid #1e40af; }
-          .footer { margin-top: 24px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
-          @media print { body { padding: 15px; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>كشف حساب ${selectedAlmanafiz?.name || ""}</h1>
-          <p>عن شهر ${monthName} ${year}</p>
-        </div>
-
-        <div class="summary">
-          <div class="summary-card">
-            <div class="label">إجمالي الخطوط</div>
-            <div class="value">${totalLines}</div>
-            <div class="sub">خط</div>
-          </div>
-          <div class="summary-card">
-            <div class="label">إجمالي المبلغ</div>
-            <div class="value">${totalAmount.toLocaleString()}</div>
-            <div class="sub">جنيه</div>
-          </div>
-          <div class="summary-card">
-            <div class="label">متوسط الفاتورة</div>
-            <div class="value">${totalLines > 0 ? Math.round(totalAmount / totalLines).toLocaleString() : 0}</div>
-            <div class="sub">جنيه</div>
-          </div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="width:40px">#</th>
-              <th>رقم الخط</th>
-              <th>اسم العميل</th>
-              <th>ملاحظات التقرير</th>
-              <th style="width:120px">إجمالي الفاتورة</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${lines.map((line, i) => `
-              <tr>
-                <td>${i + 1}</td>
-                <td>${line.number}</td>
-                <td>${line.client_name}</td>
-                <td>${line.report_note}</td>
-                <td>${line.total_price.toLocaleString()} جنيه</td>
-              </tr>
-            `).join("")}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colspan="2">الإجمالي</td>
-              <td>${totalLines} خط</td>
-              <td></td>
-              <td>${totalAmount.toLocaleString()} جنيه</td>
-            </tr>
-          </tfoot>
-        </table>
-
-        <div class="footer">
-          تم إنشاء هذا الكشف بتاريخ ${new Date().toLocaleDateString("ar-EG")}
-        </div>
-      </body>
-      </html>
-    `;
-
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    setTimeout(() => { win.print(); }, 500);
-  }
-
-  // ─── Excel ────────────────────────────────────────────────
-  function exportExcel() {
-    const [year, month] = filterMonth.split("-");
-    const data = [
-      ...lines.map((line, i) => ({
-        "#": i + 1,
-        "رقم الخط": line.number,
-        "اسم العميل": line.client_name,
-        "ملاحظات التقرير": line.report_note,
-        "إجمالي الفاتورة": line.total_price,
-      })),
-      {
-        "#": "",
-        "رقم الخط": "",
-        "اسم العميل": "الإجمالي",
-        "ملاحظات التقرير": `${totalLines} خط`,
-        "إجمالي الفاتورة": totalAmount,
-      } as any,
-    ];
-    const ws = XLSX.utils.json_to_sheet(data);
+  // ─── Export unpaid ────────────────────────────────────────
+  function exportUnpaid() {
+    if (unpaidList.length === 0) return;
+    const rows = unpaidList.map((u) => ({
+      "رقم الخط": u.number,
+      "العميل": u.client,
+      "الشبكة": u.provider,
+      "المبلغ المطلوب": u.amount,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "كشف حساب");
-    XLSX.writeFile(wb, `كشف-${selectedAlmanafiz?.name}-${year}-${month}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "غير مسدد");
+    XLSX.writeFile(wb, `unpaid-${filterMonth}.xlsx`);
   }
 
   if (!authorized) return null;
 
+  const collectionRate = totals.totalLines > 0
+    ? ((totals.paidLines / totals.totalLines) * 100).toFixed(1)
+    : "0";
+
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-6 md:p-8">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-7xl mx-auto">
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <span className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center shrink-0">
-            <FileText className="w-6 h-6 text-blue-600" />
+            <BarChart2 className="w-6 h-6 text-blue-600" />
           </span>
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-slate-900">كشوفات المنافذ والهيئات</h1>
-            <p className="text-sm text-slate-500 mt-0.5">استعراض وطباعة كشف حساب لكل منفذ أو هيئة</p>
+            <h1 className="text-2xl md:text-3xl font-bold text-slate-900">متابعة التحصيل</h1>
+            <p className="text-sm text-slate-500 mt-0.5">المسدد والغير مسدد حسب القسم والمنفذ والشهر</p>
           </div>
         </div>
 
         {/* Filters */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-6">
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid md:grid-cols-4 gap-3">
+            {/* القسم */}
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">القسم</label>
+              <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200">
+                <option value="">كل الأقسام</option>
+                {departmentsList.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
 
-            {/* المنفذ — searchable */}
+            {/* المنفذ/الهيئة */}
             <div>
               <label className="block text-xs text-slate-500 mb-1.5">المنفذ / الهيئة</label>
-              <div ref={almanafizRef} className="relative">
-                {filterAlmanafiz ? (
-                  <div className="flex items-center justify-between border border-blue-300 bg-blue-50 rounded-xl px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <Network className="w-4 h-4 text-blue-500" />
-                      <span className="text-sm font-medium text-blue-800">{selectedAlmanafiz?.name}</span>
-                    </div>
-                    <button onClick={() => { setFilterAlmanafiz(""); setAlmanafizSearch(""); }}
-                      className="text-blue-400 hover:text-blue-600 transition">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="relative">
-                      <Network className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        value={almanafizSearch}
-                        onChange={(e) => { setAlmanafizSearch(e.target.value); setShowAlmanafizDropdown(true); }}
-                        onFocus={() => setShowAlmanafizDropdown(true)}
-                        placeholder="ابحث عن منفذ أو هيئة..."
-                        className="w-full border border-slate-200 bg-slate-50 text-slate-900 pr-10 pl-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm"
-                      />
-                    </div>
-                    {showAlmanafizDropdown && (
-                      <div className="absolute z-20 w-full bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-56 overflow-y-auto">
-                        {filteredAlmanafiz.length > 0 ? (
-                          filteredAlmanafiz.map((a) => (
-                            <button key={a.id} type="button"
-                              onClick={() => {
-                                setFilterAlmanafiz(String(a.id));
-                                setAlmanafizSearch("");
-                                setShowAlmanafizDropdown(false);
-                              }}
-                              className="w-full text-right px-4 py-2.5 hover:bg-slate-50 text-sm text-slate-700 transition border-b border-slate-50 last:border-0">
-                              {a.name}
-                            </button>
-                          ))
-                        ) : (
-                          <p className="px-4 py-3 text-sm text-slate-400">مش لاقي نتايج</p>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+              <select value={filterPlace} onChange={(e) => setFilterPlace(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200">
+                <option value="">الكل</option>
+                <optgroup label="المنافذ">
+                  {almanafizList.map((a) => (
+                    <option key={`a_${a.id}`} value={`a_${a.id}`}>{a.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="الهيئات">
+                  {heiaatList.map((h) => (
+                    <option key={`h_${h.id}`} value={`h_${h.id}`}>{h.name}</option>
+                  ))}
+                </optgroup>
+              </select>
             </div>
 
             {/* الشهر */}
             <div>
-              <label className="block text-xs text-slate-500 mb-1.5">الشهر</label>
-              <div className="relative">
-                <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input type="month" value={filterMonth}
-                  onChange={(e) => setFilterMonth(e.target.value)}
-                  className="w-full border border-slate-200 bg-slate-50 text-slate-900 pr-10 pl-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm" />
-              </div>
+              <label className="block text-xs text-slate-500 mb-1.5">شهر السداد *</label>
+              <input type="month" value={filterMonth}
+                onChange={(e) => setFilterMonth(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
             </div>
 
             {/* زرار */}
             <div className="flex items-end">
-              <button onClick={loadData} disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-medium text-sm transition">
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Filter className="w-4 h-4" />}
-                عرض الكشف
+              <button onClick={loadData} disabled={loading || !filterMonth}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-3 rounded-xl font-medium text-sm transition">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                عرض البيانات
               </button>
             </div>
           </div>
         </div>
 
-        {/* Results */}
-        {searched && !loading && (
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center gap-2 text-slate-400 py-20">
+            <Loader2 className="w-5 h-5 animate-spin" /> جاري تحميل البيانات...
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!loading && !dataLoaded && (
+          <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-400">
+            اختاري الفلاتر واضغطي "عرض البيانات"
+          </div>
+        )}
+
+        {/* No results */}
+        {!loading && dataLoaded && totals.totalLines === 0 && (
+          <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-400">
+            لا توجد خطوط بالفلاتر المحددة
+          </div>
+        )}
+
+        {!loading && dataLoaded && totals.totalLines > 0 && (
           <>
-            {/* Summary */}
-            <div className="grid grid-cols-3 gap-4 mb-5">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">إجمالي الخطوط</p>
-                <p className="text-3xl font-bold text-blue-600">{totalLines}</p>
-                <p className="text-xs text-slate-400 mt-1">خط</p>
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">إجمالي الخطوط</p>
+                  <PhoneCall className="w-4 h-4 text-blue-500" />
+                </div>
+                <p className="text-2xl font-bold text-slate-900 mt-2">{totals.totalLines.toLocaleString()}</p>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">إجمالي المبلغ</p>
-                <p className="text-3xl font-bold text-green-600">{totalAmount.toLocaleString()}</p>
-                <p className="text-xs text-slate-400 mt-1">جنيه</p>
+
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">مسدد</p>
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                </div>
+                <p className="text-2xl font-bold text-green-600 mt-2">{totals.paidLines.toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{collectionRate}%</p>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">متوسط الفاتورة</p>
-                <p className="text-3xl font-bold text-slate-700">
-                  {totalLines > 0 ? Math.round(totalAmount / totalLines).toLocaleString() : 0}
-                </p>
-                <p className="text-xs text-slate-400 mt-1">جنيه</p>
+
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">غير مسدد</p>
+                  <XCircle className="w-4 h-4 text-red-500" />
+                </div>
+                <p className="text-2xl font-bold text-red-500 mt-2">{totals.unpaidLines.toLocaleString()}</p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">إجمالي المطلوب</p>
+                  <DollarSign className="w-4 h-4 text-purple-500" />
+                </div>
+                <p className="text-2xl font-bold text-purple-600 mt-2">{totals.totalRevenue.toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-0.5">جنيه</p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-500">إجمالي المحصل</p>
+                  <TrendingUp className="w-4 h-4 text-green-500" />
+                </div>
+                <p className="text-2xl font-bold text-green-600 mt-2">{totals.totalCollected.toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-0.5">جنيه</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-yellow-400 to-orange-400 rounded-2xl shadow-sm p-5 text-white">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs opacity-90">أحسن بائع</p>
+                  <Award className="w-4 h-4" />
+                </div>
+                <p className="text-lg font-bold mt-2 truncate">{topAgent?.name || "—"}</p>
+                <p className="text-xs opacity-80 mt-0.5">{topAgent?.count.toLocaleString() || 0} خط</p>
               </div>
             </div>
 
-            {/* Action buttons */}
-            {lines.length > 0 && (
-              <div className="flex gap-3 mb-4">
-                <button onClick={printPDF}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition shadow-sm">
-                  <FileText className="w-4 h-4" /> طباعة PDF
-                </button>
-                <button onClick={exportExcel}
-                  className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition shadow-sm">
-                  <FileSpreadsheet className="w-4 h-4" /> تحميل Excel
-                </button>
-              </div>
-            )}
+            {/* Provider Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {providerStats.map((p) => {
+                const rate = p.total > 0 ? Math.round((p.paid / p.total) * 100) : 0;
+                return (
+                  <div key={p.name} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full" style={{ backgroundColor: p.color }} />
+                        <h3 className="font-bold text-slate-800">{p.name}</h3>
+                      </div>
+                      <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                        style={{ backgroundColor: `${p.color}15`, color: p.color }}>
+                        {rate}% تحصيل
+                      </span>
+                    </div>
 
-            {/* Table */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
-              <div className="px-6 py-4 border-b border-slate-100 bg-blue-50/50">
-                <h2 className="text-base font-bold text-blue-800">
-                  كشف حساب: {selectedAlmanafiz?.name}
+                    <div className="grid grid-cols-3 gap-2 text-center mb-4">
+                      <div className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-xl font-bold text-slate-900">{p.total.toLocaleString()}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">إجمالي</p>
+                      </div>
+                      <div className="bg-green-50 rounded-xl p-3">
+                        <p className="text-xl font-bold text-green-600">{p.paid.toLocaleString()}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">مسدد</p>
+                      </div>
+                      <div className="bg-red-50 rounded-xl p-3">
+                        <p className="text-xl font-bold text-red-500">{p.unpaid.toLocaleString()}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">غير مسدد</p>
+                      </div>
+                    </div>
+
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden mb-3">
+                      <div className="h-full rounded-full transition-all"
+                        style={{ width: `${rate}%`, backgroundColor: p.color }} />
+                    </div>
+
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-500">
+                        المطلوب: <strong className="text-slate-800">{p.revenue.toLocaleString()}</strong>
+                      </span>
+                      <span className="text-slate-500">
+                        المحصل: <strong className="text-green-600">{p.collected.toLocaleString()}</strong>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Unpaid List */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="flex items-center justify-between p-5 border-b border-slate-100">
+                <h2 className="text-sm font-bold text-slate-700">
+                  الخطوط الغير مسددة ({unpaidList.length.toLocaleString()})
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {filterMonth.split("-")[1]} / {filterMonth.split("-")[0]}
-                </p>
+                <button onClick={exportUnpaid}
+                  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm transition">
+                  <Download className="w-4 h-4" /> تحميل Excel
+                </button>
               </div>
-
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs">
-                  <tr>
-                    <th className="p-3 text-right font-medium w-10">#</th>
-                    <th className="p-3 text-right font-medium">رقم الخط</th>
-                    <th className="p-3 text-right font-medium">اسم العميل</th>
-                    <th className="p-3 text-right font-medium">ملاحظات التقرير</th>
-                    <th className="p-3 text-right font-medium">إجمالي الفاتورة</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-700">
-                  {lines.map((line, i) => (
-                    <tr key={line.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                      <td className="p-3 text-slate-400">{i + 1}</td>
-                      <td className="p-3 font-mono font-medium text-slate-900">{line.number}</td>
-                      <td className="p-3">{line.client_name}</td>
-                      <td className="p-3 text-slate-500">{line.report_note}</td>
-                      <td className="p-3 font-semibold text-slate-900">
-                        {line.total_price.toLocaleString()} جنيه
-                      </td>
-                    </tr>
-                  ))}
-                  {lines.length === 0 && (
+              <div className="overflow-auto max-h-96">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0">
                     <tr>
-                      <td colSpan={5} className="p-10 text-center text-slate-400">
-                        لا توجد خطوط في هذه الفترة
-                      </td>
+                      <th className="p-3 text-right font-medium">رقم الخط</th>
+                      <th className="p-3 text-right font-medium">العميل</th>
+                      <th className="p-3 text-right font-medium">الشبكة</th>
+                      <th className="p-3 text-right font-medium">المبلغ المطلوب</th>
                     </tr>
-                  )}
-                </tbody>
-                {lines.length > 0 && (
-                  <tfoot>
-                    <tr className="bg-blue-50 font-bold text-blue-800 border-t-2 border-blue-200">
-                      <td className="p-3" colSpan={2}>الإجمالي</td>
-                      <td className="p-3">{totalLines} خط</td>
-                      <td className="p-3"></td>
-                      <td className="p-3">{totalAmount.toLocaleString()} جنيه</td>
-                    </tr>
-                  </tfoot>
+                  </thead>
+                  <tbody className="text-slate-700">
+                    {unpaidList.slice(0, 200).map((u, i) => (
+                      <tr key={`${u.number}-${i}`} className="border-t border-slate-100 hover:bg-slate-50/80">
+                        <td className="p-3 font-mono font-medium">{u.number}</td>
+                        <td className="p-3">{u.client}</td>
+                        <td className="p-3">
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-slate-100">
+                            {u.provider}
+                          </span>
+                        </td>
+                        <td className="p-3 font-bold text-red-500">{u.amount.toLocaleString()} جنيه</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {unpaidList.length > 200 && (
+                  <p className="text-center text-xs text-slate-400 py-3">
+                    معروض أول 200 — حمّلي الـ Excel لكل القائمة
+                  </p>
                 )}
-              </table>
+              </div>
             </div>
           </>
         )}
