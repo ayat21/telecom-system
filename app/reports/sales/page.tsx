@@ -143,8 +143,10 @@ export default function SalesPage() {
     const result = data || [];
     setLines(result);
 
-    const migration = result.filter((x) => x.department_id === MIGRATION_DEPT_ID).length;
-    const sales = result.filter((x) => x.department_id && x.department_id !== MIGRATION_DEPT_ID).length;
+const migration = result.filter((x: any) => x.department_id === MIGRATION_DEPT_ID).length;
+   const sales = result.filter((x: any) =>
+  x.department_id && x.department_id !== MIGRATION_DEPT_ID
+).length;
 
     // إجمالي كل المبيعات الفعلية (كل خط عنده department_id ومش مايجريشن) — من غير فلتر تاريخ
     let totalSalesQuery = applyActiveFilter(
