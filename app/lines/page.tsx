@@ -63,39 +63,51 @@ export default function LinesPage() {
   }, []);
 
   // ─── Load Lines ───────────────────────────────────────────
-  async function loadLines() {
-    setLoading(true);
+ async function loadLines() {
+  setLoading(true);
 
-    let query = supabase
-      .from("lines")
-      .select(`
-        id,client_id, number, customer_date_real, report_note, total_price, has_sim,
-        clients(name),
-        providers(name),
-        almanafiz(name),
-        calls_packages(package_name),
-        line_statuses(name)
-      `)
-      .or("is_deleted.is.null,is_deleted.eq.false")
-      .order("id", { ascending: false });
+  let query = supabase
+    .from("lines")
+    .select(`
+      id, client_id, number, customer_date_real, report_note, total_price, has_sim,
+      clients(name),
+      providers(name),
+      almanafiz(name),
+      calls_packages(package_name),
+      line_statuses(name)
+    `)
+    .not("is_deleted", "eq", true)
+    .order("id", { ascending: false });
 
-    if (search.trim())
-      query = query.or(`number.ilike.%${search}%`);
-    if (filterProvider)
-      query = query.eq("provider_id", Number(filterProvider));
-    if (filterAlmanafiz)
-      query = query.eq("almanafiz_id", Number(filterAlmanafiz));
-    if (fromDate) query = query.gte("customer_date_real", fromDate);
-    if (toDate) query = query.lte("customer_date_real", toDate);
+  if (search.trim()) {
+    // دوري عن عملاء بالاسم الأول
+    const { data: matchedClients } = await supabase
+      .from("clients")
+      .select("id")
+      .ilike("name", `%${search}%`);
 
-    query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+    const clientIds = (matchedClients || []).map((c) => c.id);
 
-    const { data, error } = await query;
-    console.log(data?.[0]);
-    if (!error) setLines(data || []);
-    setLoading(false);
+    if (clientIds.length > 0) {
+      query = query.or(`number.ilike.%${search}%,client_id.in.(${clientIds.join(",")})`);
+    } else {
+      query = query.ilike("number", `%${search}%`);
+    }
   }
 
+  if (filterProvider)
+    query = query.eq("provider_id", Number(filterProvider));
+  if (filterAlmanafiz)
+    query = query.eq("almanafiz_id", Number(filterAlmanafiz));
+  if (fromDate) query = query.gte("customer_date_real", fromDate);
+  if (toDate) query = query.lte("customer_date_real", toDate);
+
+  query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+
+  const { data, error } = await query;
+  if (!error) setLines(data || []);
+  setLoading(false);
+}
   // ─── Load Stats ───────────────────────────────────────────
   async function loadStats() {
     const { count } = await supabase
@@ -183,12 +195,23 @@ export default function LinesPage() {
     setProgressText("");
 
     try {
-      let countQuery = supabase
-        .from("lines")
-        .select("*", { count: "exact", head: true })
-        .or("is_deleted.is.null,is_deleted.eq.false");
+     let countQuery = supabase
+  .from("lines")
+  .select("*", { count: "exact", head: true })
+  .not("is_deleted", "eq", true);
 
-      if (search.trim()) countQuery = countQuery.or(`number.ilike.%${search}%`);
+if (search.trim()) {
+  const { data: matchedClients } = await supabase
+    .from("clients")
+    .select("id")
+    .ilike("name", `%${search}%`);
+  const clientIds = (matchedClients || []).map((c) => c.id);
+  if (clientIds.length > 0) {
+    countQuery = countQuery.or(`number.ilike.%${search}%,client_id.in.(${clientIds.join(",")})`);
+  } else {
+    countQuery = countQuery.ilike("number", `%${search}%`);
+  }
+}
       if (filterProvider) countQuery = countQuery.eq("provider_id", Number(filterProvider));
       if (filterAlmanafiz) countQuery = countQuery.eq("almanafiz_id", Number(filterAlmanafiz));
       if (fromDate) countQuery = countQuery.gte("customer_date_real", fromDate);
@@ -208,29 +231,25 @@ export default function LinesPage() {
         const batchPromises = [];
 
         for (let j = i; j < Math.min(i + concurrency, totalBatches); j++) {
-          let q = supabase
-            .from("lines")
-            .select(`
-              id, number, client_id,customer_date_real, report_note, total_price,
-              serial_number, has_sim, note,
-              calls_package_price, internet_package_price, line_extension_price,
-              clients(name, national_id, address),
-              providers(name),
-              almanafiz(name),
-              accounts(account_no, account_name),
-              agents(name),
-              departments(name),
-              groups(name),
-              line_statuses(name),
-              calls_packages(package_name),
-              internet_packages(package_name),
-              line_extensions(extension_name)
-            `)
-            .or("is_deleted.is.null,is_deleted.eq.false")
-            .order("id", { ascending: false })
-            .range(j * batchSize, (j + 1) * batchSize - 1);
+  let q = supabase
+    .from("lines")
+    .select(`...`)
+    .not("is_deleted", "eq", true)
+    .order("id", { ascending: false })
+    .range(j * batchSize, (j + 1) * batchSize - 1);
 
-          if (search.trim()) q = q.or(`number.ilike.%${search}%`);
+  if (search.trim()) {
+    const { data: matchedClients } = await supabase
+      .from("clients")
+      .select("id")
+      .ilike("name", `%${search}%`);
+    const clientIds = (matchedClients || []).map((c) => c.id);
+    if (clientIds.length > 0) {
+      q = q.or(`number.ilike.%${search}%,client_id.in.(${clientIds.join(",")})`);
+    } else {
+      q = q.ilike("number", `%${search}%`);
+    }
+  }
           if (filterProvider) q = q.eq("provider_id", Number(filterProvider));
           if (filterAlmanafiz) q = q.eq("almanafiz_id", Number(filterAlmanafiz));
           if (fromDate) q = q.gte("customer_date_real", fromDate);
@@ -388,7 +407,7 @@ export default function LinesPage() {
           <div className="relative flex-1">
             <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="بحث برقم الخط"
+              placeholder="بحث برقم الخط أو اسم العميل"
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300" />
           </div>
           <button onClick={loadLines}

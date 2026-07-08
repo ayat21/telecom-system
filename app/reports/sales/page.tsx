@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -9,7 +9,7 @@ import {
 import {
   Download, ShoppingBag, ArrowRightLeft, EyeOff,
   PieChart as PieChartIcon, Users, ClipboardList,
-  Filter, Calendar, ChevronLeft, Star,
+  Filter, Calendar, ChevronLeft, Star, Loader2, ImageDown,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -25,6 +25,13 @@ const PROVIDER_COLORS: Record<string, string> = {
 };
 function getProviderColor(name: string, index: number) {
   return PROVIDER_COLORS[name] ?? COLORS[index % COLORS.length];
+}
+
+// فلتر موحّد: يستبعد المحذوف والملغى (Deactive)
+function applyActiveFilter(q: any) {
+  return q
+    .or("is_deleted.is.null,is_deleted.eq.false")
+    .or("is_deactive.is.null,is_deactive.eq.false");
 }
 
 function StatCard({ label, value, suffix, subLabel, subValue, icon: Icon, iconBg, iconColor, valueColor }: {
@@ -71,6 +78,7 @@ function SectionCard({ title, icon: Icon, className = "", children }: {
 
 export default function SalesPage() {
   const router = useRouter();
+  const reportRef = useRef<HTMLDivElement>(null);
   const [authorized, setAuthorized] = useState(false);
   const [lines, setLines] = useState<any[]>([]);
   const [providers, setProviders] = useState<any[]>([]);
@@ -80,9 +88,12 @@ export default function SalesPage() {
   const [filterProvider, setFilterProvider] = useState("");
   const [filterAgent, setFilterAgent] = useState("");
   const [loading, setLoading] = useState(false);
+  const [exportingImage, setExportingImage] = useState(false);
 
   const [stats, setStats] = useState({
-    totalLines: 0, totalInventory: 0, sales: 0, migration: 0, unsold: 0,
+    totalLines: 0,      // إجمالي المبيعات (كل خط اتباع فعلياً — مش الخطوط الكل)
+    totalInventory: 0,  // إجمالي المخزون الفعّال (بدون محذوف/ملغى)
+    sales: 0, migration: 0, unsold: 0,
   });
 
   useEffect(() => {
@@ -108,15 +119,17 @@ export default function SalesPage() {
   async function loadData() {
     setLoading(true);
 
-    let query = supabase
-      .from("lines")
-      .select(`
-        id, customer_date_real, department_id, agent_id, provider_id,
-        providers(id, name),
-        agents(id, name),
-        departments(id, name)
-      `)
-      .or("is_deleted.is.null,is_deleted.eq.false");
+    // خطوط الفترة المفلترة (لحساب مبيعات/مايجريشن والجداول التفصيلية)
+    let query = applyActiveFilter(
+      supabase
+        .from("lines")
+        .select(`
+          id, customer_date_real, department_id, agent_id, provider_id,
+          providers(id, name),
+          agents(id, name),
+          departments(id, name)
+        `)
+    );
 
     if (fromDate) query = query.gte("customer_date_real", fromDate);
     if (toDate) query = query.lte("customer_date_real", toDate);
@@ -133,20 +146,37 @@ export default function SalesPage() {
     const migration = result.filter((x) => x.department_id === MIGRATION_DEPT_ID).length;
     const sales = result.filter((x) => x.department_id && x.department_id !== MIGRATION_DEPT_ID).length;
 
-    const totalInventoryQuery = supabase.from("lines").select("*", { count: "exact", head: true })
-      .or("is_deleted.is.null,is_deleted.eq.false");
-    if (filterProvider) totalInventoryQuery.eq("provider_id", Number(filterProvider));
-    if (filterAgent) totalInventoryQuery.eq("agent_id", Number(filterAgent));
+    // إجمالي كل المبيعات الفعلية (كل خط عنده department_id ومش مايجريشن) — من غير فلتر تاريخ
+    let totalSalesQuery = applyActiveFilter(
+      supabase.from("lines").select("*", { count: "exact", head: true })
+    ).not("department_id", "is", null).neq("department_id", MIGRATION_DEPT_ID);
+    if (filterProvider) totalSalesQuery = totalSalesQuery.eq("provider_id", Number(filterProvider));
+    if (filterAgent) totalSalesQuery = totalSalesQuery.eq("agent_id", Number(filterAgent));
+    const { count: totalSalesCount } = await totalSalesQuery;
+
+    // إجمالي كل المخزون الفعّال (بدون محذوف/ملغى) — من غير فلتر تاريخ
+    let totalInventoryQuery = applyActiveFilter(
+      supabase.from("lines").select("*", { count: "exact", head: true })
+    );
+    if (filterProvider) totalInventoryQuery = totalInventoryQuery.eq("provider_id", Number(filterProvider));
+    if (filterAgent) totalInventoryQuery = totalInventoryQuery.eq("agent_id", Number(filterAgent));
     const { count: totalInventoryCount } = await totalInventoryQuery;
 
-    const unsoldQuery = supabase.from("lines").select("*", { count: "exact", head: true })
-      .or("is_deleted.is.null,is_deleted.eq.false")
-      .is("department_id", null);
-    if (filterProvider) unsoldQuery.eq("provider_id", Number(filterProvider));
-    if (filterAgent) unsoldQuery.eq("agent_id", Number(filterAgent));
+    // الغير مباع الحالي — من غير فلتر تاريخ
+    let unsoldQuery = applyActiveFilter(
+      supabase.from("lines").select("*", { count: "exact", head: true })
+    ).is("department_id", null);
+    if (filterProvider) unsoldQuery = unsoldQuery.eq("provider_id", Number(filterProvider));
+    if (filterAgent) unsoldQuery = unsoldQuery.eq("agent_id", Number(filterAgent));
     const { count: unsoldCount } = await unsoldQuery;
 
-    setStats({ totalLines: result.length, totalInventory: totalInventoryCount || 0, sales, migration, unsold: unsoldCount || 0 });
+    setStats({
+      totalLines: totalSalesCount || 0,        // كارت "إجمالي المبيعات" الجديد
+      totalInventory: totalInventoryCount || 0,
+      sales,        // بيتفلتر بالتاريخ (أحداث بيع فعلية في الفترة المختارة)
+      migration,    // بيتفلتر بالتاريخ
+      unsold: unsoldCount || 0,  // من غير فلتر تاريخ (حالة حالية للمخزون)
+    });
     setLoading(false);
   }
 
@@ -191,40 +221,41 @@ export default function SalesPage() {
     return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [lines]);
 
-  const salesPercent = stats.totalInventory > 0 ? ((stats.sales / stats.totalInventory) * 100).toFixed(2) : "0.00";
+  // نسبة المبيعات بالنسبة لإجمالي (المبيعات + الغير مباع الحالي) — مش كل المخزون
+  const salesVsUnsoldTotal = stats.sales + stats.unsold;
+  const salesPercent = salesVsUnsoldTotal > 0 ? ((stats.sales / salesVsUnsoldTotal) * 100).toFixed(2) : "0.00";
   const migrationPercent = stats.totalInventory > 0 ? ((stats.migration / stats.totalInventory) * 100).toFixed(2) : "0.00";
-  const unsoldPercent = stats.totalInventory > 0 ? ((stats.unsold / stats.totalInventory) * 100).toFixed(2) : "0.00";
+  const unsoldPercent = salesVsUnsoldTotal > 0 ? ((stats.unsold / salesVsUnsoldTotal) * 100).toFixed(2) : "0.00";
   const totalForSummary = stats.sales + stats.migration;
 
-  // ─── Export ───────────────────────────────────────────────
-  async function exportReport() {
-    const XLSX = await import("xlsx");
-    const summarySheet = [
-      ["البند", "العدد", "النسبة"],
-      ["مبيعات", stats.sales, `${salesPercent}%`],
-      ["مايجريشن", stats.migration, `${migrationPercent}%`],
-      ["غير مباع", stats.unsold, `${unsoldPercent}%`],
-      ["الإجمالي", stats.totalInventory, "100%"],
-    ];
-    const dailySheet = [
-      ["التاريخ", "مبيعات", "مايجريشن", "غير مباع", "الإجمالي"],
-      ...dailySales.map((d) => [d.date, d.sales, d.migration, d.unsold, d.total]),
-    ];
-    const agentsSheet = [
-      ["#", "البائع", "إجمالي المبيعات"],
-      ...agentData.map((a, i) => [i + 1, a.name, a.sales]),
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summarySheet), "ملخص");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dailySheet), "المبيعات اليومية");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(agentsSheet), "البائعين");
-    XLSX.writeFile(wb, `تقرير_المبيعات_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  // ─── Export كصورة ─────────────────────────────────────────
+  async function exportReportImage() {
+    if (!reportRef.current) return;
+    setExportingImage(true);
+    try {
+const html2canvas = (await import("html2canvas-pro")).default;
+      const canvas = await html2canvas(reportRef.current, {
+  backgroundColor: "#f8fafc",
+  scale: 2,
+  useCORS: true,
+  ignoreElements: (element) => element.tagName === "IFRAME",
+});
+      const link = document.createElement("a");
+      link.download = `تقرير_المبيعات_${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      console.error(err);
+      alert("حصل خطأ أثناء تصدير الصورة");
+    } finally {
+      setExportingImage(false);
+    }
   }
 
   if (!authorized) return null;
 
   return (
-    <div dir="rtl" className="p-6 bg-slate-50 min-h-screen font-sans">
+    <div ref={reportRef} dir="rtl" className="p-6 bg-slate-50 min-h-screen font-sans">
 
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-6">
@@ -235,10 +266,10 @@ export default function SalesPage() {
           </div>
           <p className="text-slate-500 mt-1">تحليل شامل لأداء المبيعات في الفترة المحددة</p>
         </div>
-        <button onClick={exportReport}
-          className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 rounded-xl px-4 py-2.5 shadow-sm hover:bg-slate-50 transition self-start">
-          <Download className="w-4 h-4" />
-          <span className="font-medium">تصدير تقرير</span>
+        <button onClick={exportReportImage} disabled={exportingImage}
+          className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 rounded-xl px-4 py-2.5 shadow-sm hover:bg-slate-50 disabled:opacity-60 transition self-start">
+          {exportingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageDown className="w-4 h-4" />}
+          <span className="font-medium">{exportingImage ? "جارٍ التصدير..." : "تصدير كصورة"}</span>
         </button>
       </div>
 
@@ -291,22 +322,22 @@ export default function SalesPage() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard label="إجمالي المبيعات" value={stats.sales} suffix="خط"
-          subLabel="% من الإجمالي" subValue={salesPercent}
+        <StatCard label="إجمالي المبيعات (الفترة)" value={stats.sales} suffix="خط"
+          subLabel="% من (مبيعات + غير مباع)" subValue={salesPercent}
           icon={ShoppingBag} iconBg="bg-green-50" iconColor="text-green-600" valueColor="text-green-600" />
         <StatCard label="إجمالي مايجريشن" value={stats.migration} suffix="خط"
           subLabel="% من الإجمالي" subValue={migrationPercent}
           icon={ArrowRightLeft} iconBg="bg-orange-50" iconColor="text-orange-600" valueColor="text-orange-600" />
         <StatCard label="الغير مباع" value={stats.unsold} suffix="خط"
-          subLabel="% من الإجمالي" subValue={unsoldPercent}
+          subLabel="% من (مبيعات + غير مباع)" subValue={unsoldPercent}
           icon={EyeOff} iconBg="bg-red-50" iconColor="text-red-600" valueColor="text-red-600" />
         <StatCard label="نسبة المبيعات" value={`${salesPercent}%`}
-          subLabel="من إجمالي الخطوط"
+          subLabel="من إجمالي الغير مباع الحالي"
           icon={PieChartIcon} iconBg="bg-purple-50" iconColor="text-purple-600" valueColor="text-purple-600" />
         <StatCard label="نسبة مايجريشن" value={`${migrationPercent}%`}
           subLabel="من إجمالي الخطوط"
           icon={Users} iconBg="bg-rose-50" iconColor="text-rose-600" valueColor="text-rose-600" />
-        <StatCard label="إجمالي الخطوط" value={stats.totalLines} suffix="خط"
+        <StatCard label="إجمالي المبيعات (الكل)" value={stats.totalLines} suffix="خط"
           icon={ClipboardList} iconBg="bg-blue-50" iconColor="text-blue-600" valueColor="text-slate-900" />
       </div>
 

@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import { Ban } from "lucide-react";
 import {
   Pencil, ArrowRight, User, Network, Package, Tag,
   StickyNote, Loader2, Hash, Calendar, Plug, Briefcase,
@@ -131,6 +132,38 @@ function SearchableSelect({
 const inputClass = "w-full border border-slate-200 bg-white text-slate-900 p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm";
 const readonlyClass = "w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm cursor-not-allowed";
 
+// ─── Confirm Modal (بديل الـ confirm() الافتراضي) ─────────────
+function ConfirmModal({ open, title, message, confirmLabel, onConfirm, onCancel, loading }: {
+  open: boolean; title: string; message: string; confirmLabel: string;
+  onConfirm: () => void; onCancel: () => void; loading?: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+            <Ban className="w-5 h-5 text-red-600" />
+          </span>
+          <h2 className="text-base font-bold text-slate-800">{title}</h2>
+        </div>
+        <p className="text-sm text-slate-500 mb-6 leading-relaxed">{message}</p>
+        <div className="flex gap-3">
+          <button onClick={onConfirm} disabled={loading}
+            className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white py-2.5 rounded-xl font-medium text-sm transition">
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+            {confirmLabel}
+          </button>
+          <button onClick={onCancel} disabled={loading}
+            className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium transition">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EditLine({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -155,6 +188,10 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   const [clientModalOpen, setClientModalOpen] = useState(false);
   const [clientForm, setClientForm] = useState({ name: "", national_id: "", address: "", national_id_image: "" });
   const [savingClient, setSavingClient] = useState(false);
+
+  // Deactivate confirm modal state
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
 
   function showToast(message: string, type: "success" | "error") {
     setToast({ message, type });
@@ -210,6 +247,90 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     }
     loadLookups();
   }, []);
+
+  // ─── Deactivate ───────────────────────────────────────────
+  function openDeactivateModal() {
+    setDeactivateModalOpen(true);
+  }
+
+  async function confirmDeactivate() {
+    setDeactivating(true);
+
+    const deactiveDate = new Date();
+    let durationDays: number | null = null;
+    if (line.customer_date_real) {
+      const customerDate = new Date(line.customer_date_real);
+      const diffMs = deactiveDate.getTime() - customerDate.getTime();
+      durationDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    }
+
+    // جيبي القيم مباشرة من الداتابيز وقت الحفظ (مش من القوائم المحلية)
+    const { data: currentLineData } = await supabase
+      .from("lines")
+      .select("client_id, almanafiz_id, heiaat_id, customer_date_real, clients(name, national_id, address), almanafiz(name), heiaat(name)")
+      .eq("id", id)
+      .single();
+
+    const clientName = (currentLineData?.clients as any)?.name || null;
+    const clientNationalId = (currentLineData?.clients as any)?.national_id || null;
+    const clientAddress = (currentLineData?.clients as any)?.address || null;
+    const almanafizName = (currentLineData?.almanafiz as any)?.name || (currentLineData?.heiaat as any)?.name || null;
+
+    // احفظي في history
+    await supabase.from("history").insert({
+      number: line.number,
+      customer_name: clientName,
+      national_id: clientNationalId,
+      address: clientAddress,
+      almanafiz: almanafizName,
+      action_type: "deactivated",
+      action_date: deactiveDate.toISOString(),
+    });
+
+    // سجّلي في audit_logs
+    await supabase.from("audit_logs").insert({
+      user_name: localStorage.getItem("full_name") || "Unknown",
+      action_type: "DEACTIVATE",
+      table_name: "lines",
+      record_id: String(id),
+      old_data: {
+        client: { old: clientName || "—", new: "—" },
+        almanafiz: { old: almanafizName || "—", new: "—" },
+        customer_date: { old: currentLineData?.customer_date_real || "—", new: "—" },
+      },
+    });
+
+    // حدّثي الخط
+    const { error } = await supabase.from("lines").update({
+      client_id: null,
+      almanafiz_id: null,
+      heiaat_id: null,
+      customer_date_real: null,
+      is_deactive: true,
+      deactive_date: deactiveDate.toISOString(),
+      active_duration_days: durationDays,
+    }).eq("id", id);
+
+    setDeactivating(false);
+    setDeactivateModalOpen(false);
+
+    if (error) { showToast(error.message, "error"); return; }
+
+    showToast("تم إلغاء تفعيل الخط بنجاح", "success");
+
+    setLine((prev: any) => ({
+      ...prev,
+      client_id: null,
+      almanafiz_id: null,
+      heiaat_id: null,
+      customer_date_real: null,
+      is_deactive: true,
+    }));
+    setOriginalLine((prev: any) => ({ ...prev, is_deactive: true, client_id: null, almanafiz_id: null, heiaat_id: null, customer_date_real: null }));
+    setGroupName("");
+    setDepartmentName("");
+    await loadHistory(id);
+  }
 
   // ─── Search clients ───────────────────────────────────────
   async function searchClients(query: string) {
@@ -426,10 +547,16 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     if (originalLine.report_note !== line.report_note)
       changes.report_note = { old: originalLine.report_note || "—", new: line.report_note || "—" };
 
+    // لو الخط كان deactive وحطينا له عميل أو منفذ تاني، نرجّعه active تلقائياً
+    const shouldReactivate = Boolean(originalLine.is_deactive) && Boolean(line.client_id || line.almanafiz_id || line.heiaat_id);
+    if (shouldReactivate) {
+      changes.status = { old: "ملغى (Deactive)", new: "مفعّل" };
+    }
+
     if (Object.keys(changes).length > 0) {
       await supabase.from("audit_logs").insert({
         user_name: localStorage.getItem("full_name") || "Unknown",
-        action_type: "UPDATE",
+        action_type: shouldReactivate ? "REACTIVATE" : "UPDATE",
         table_name: "lines",
         record_id: String(id),
         old_data: changes,
@@ -457,14 +584,17 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       calls_package_price:    Number(line.calls_package_price || 0),
       internet_package_price: Number(line.internet_package_price || 0),
       line_extension_price:   Number(line.line_extension_price || 0),
-      total_price:            Number(line.total_price || 0),
+      total_price:             Number(line.total_price || 0),
+      is_deactive: shouldReactivate ? false : Boolean(line.is_deactive),
     }).eq("id", id);
 
     if (error) { showToast(error.message, "error"); return; }
 
-    showToast("تم حفظ التعديلات ✅", "success");
+    showToast(shouldReactivate ? "تم حفظ التعديلات وإعادة تفعيل الخط ✅" : "تم حفظ التعديلات ✅", "success");
     await loadHistory(id);
-    setOriginalLine(line);
+    const updatedLine = { ...line, is_deactive: shouldReactivate ? false : line.is_deactive };
+    setLine(updatedLine);
+    setOriginalLine(updatedLine);
   }
 
   if (!line) return (
@@ -491,6 +621,17 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         </div>
       )}
 
+      {/* Deactivate confirm modal (بديل confirm() الافتراضي) */}
+      <ConfirmModal
+        open={deactivateModalOpen}
+        title="إلغاء تفعيل الخط"
+        message="هل أنتِ متأكدة من إلغاء تفعيل الخط؟ هيتم مسح بيانات العميل والمنفذ وحفظهم في السجل، ويظل الخط قابل لإعادة التفعيل لاحقاً."
+        confirmLabel="تأكيد الإلغاء"
+        onConfirm={confirmDeactivate}
+        onCancel={() => setDeactivateModalOpen(false)}
+        loading={deactivating}
+      />
+
       <div className="max-w-5xl mx-auto">
 
         {/* Header */}
@@ -501,7 +642,14 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
             </span>
             <div>
               <h1 className="text-2xl md:text-3xl font-bold text-white">تعديل بيانات الخط</h1>
-              <p className="text-sm text-blue-100 mt-0.5">رقم الخط: {line.number}</p>
+              <p className="text-sm text-blue-100 mt-0.5">
+                رقم الخط: {line.number}
+                {line.is_deactive && (
+                  <span className="mr-2 inline-flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded-full text-xs">
+                    <Ban className="w-3 h-3" /> ملغى (Deactive)
+                  </span>
+                )}
+              </p>
             </div>
           </div>
           <button onClick={() => router.back()}
@@ -721,7 +869,13 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         </div>
 
         {/* Save */}
-        <div className="flex justify-end mb-6">
+        <div className="flex justify-between mb-6">
+          <button onClick={openDeactivateModal}
+            disabled={line.is_deactive}
+            className="flex items-center gap-2 bg-red-50 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed text-red-600 px-6 py-3 rounded-xl font-medium transition border border-red-200">
+            <Ban className="w-4 h-4" /> {line.is_deactive ? "الخط ملغى بالفعل" : "Deactive"}
+          </button>
+
           <button onClick={save}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition text-white px-8 py-3 rounded-xl shadow-sm font-medium">
             <Save className="w-4 h-4" /> حفظ التعديلات
@@ -784,42 +938,54 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
           )}
 
           <div className="space-y-3">
-            {historyList.map((item) => (
-              <div key={item.id} className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">
-                      {item.user_name?.charAt(0) || "?"}
-                    </span>
-                    <span className="text-sm font-bold text-slate-700">{item.user_name || "—"}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                      item.action_type === "DELETE" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"
-                    }`}>
-                      {item.action_type === "UPDATE" ? "تعديل" : item.action_type === "DELETE" ? "حذف" : item.action_type}
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-400">
-                    {new Date(item.created_at).toLocaleString("ar-EG")}
-                  </span>
-                </div>
+            {historyList.map((item) => {
+              const actionLabel =
+                item.action_type === "DELETE" ? "حذف" :
+                item.action_type === "DEACTIVATE" ? "إلغاء تفعيل" :
+                item.action_type === "REACTIVATE" ? "إعادة تفعيل" :
+                item.action_type === "UPDATE" ? "تعديل" : item.action_type;
 
-                {item.old_data && Object.keys(item.old_data).length > 0 && (
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-slate-400 font-medium mb-1">التغييرات:</p>
-                    {Object.entries(
-                      typeof item.old_data === "string" ? JSON.parse(item.old_data) : item.old_data
-                    ).map(([key, val]: any) => (
-                      <div key={key} className="flex items-center gap-2 text-xs bg-white rounded-lg border border-slate-100 px-2.5 py-2">
-                        <span className="text-slate-400 shrink-0 min-w-fit">{key}:</span>
-                        <span className="text-red-400 line-through">{String(val.old ?? "—")}</span>
-                        <span className="text-slate-300">←</span>
-                        <span className="text-green-600 font-medium">{String(val.new ?? "—")}</span>
-                      </div>
-                    ))}
+              const actionColor =
+                item.action_type === "DELETE" ? "bg-red-50 text-red-700" :
+                item.action_type === "DEACTIVATE" ? "bg-orange-50 text-orange-700" :
+                item.action_type === "REACTIVATE" ? "bg-green-50 text-green-700" :
+                "bg-blue-50 text-blue-700";
+
+              return (
+                <div key={item.id} className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">
+                        {item.user_name?.charAt(0) || "?"}
+                      </span>
+                      <span className="text-sm font-bold text-slate-700">{item.user_name || "—"}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${actionColor}`}>
+                        {actionLabel}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {new Date(item.created_at).toLocaleString("ar-EG")}
+                    </span>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {item.old_data && Object.keys(item.old_data).length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-slate-400 font-medium mb-1">التغييرات:</p>
+                      {Object.entries(
+                        typeof item.old_data === "string" ? JSON.parse(item.old_data) : item.old_data
+                      ).map(([key, val]: any) => (
+                        <div key={key} className="flex items-center gap-2 text-xs bg-white rounded-lg border border-slate-100 px-2.5 py-2">
+                          <span className="text-slate-400 shrink-0 min-w-fit">{key}:</span>
+                          <span className="text-red-400 line-through">{String(val.old ?? "—")}</span>
+                          <span className="text-slate-300">←</span>
+                          <span className="text-green-600 font-medium">{String(val.new ?? "—")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

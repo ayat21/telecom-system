@@ -11,6 +11,9 @@ import {
 
 const PAGE_SIZE = 50;
 
+// الأقسام المستبعدة لما "كل الأقسام" مختارة
+const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "", "هيثم"];
+
 export default function PaymentsPage() {
   const router = useRouter();
   const [authorized, setAuthorized] = useState(false);
@@ -25,14 +28,19 @@ export default function PaymentsPage() {
   const [search, setSearch] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
   const [filterCode, setFilterCode] = useState("");
+  const [filterDepartment, setFilterDepartment] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
+  const [departmentsList, setDepartmentsList] = useState<any[]>([]);
 
   // Stats
   const [stats, setStats] = useState({
     totalCount: 0,
     totalAmount: 0,
     monthCount: 0,
-    monthAmount: 0,
+    monthCollected: 0,
+    monthRequired: 0,
+    monthUnpaid: 0,
+    collectionRate: 0,
   });
 
   // Import
@@ -52,6 +60,11 @@ export default function PaymentsPage() {
     setRole(r);
     if (!r) { router.replace("/login"); return; }
     setAuthorized(true);
+  }, []);
+
+  useEffect(() => {
+    supabase.from("departments").select("id, name").order("name")
+      .then(({ data }) => setDepartmentsList(data || []));
   }, []);
 
   // ─── Load payments ────────────────────────────────────────
@@ -77,9 +90,28 @@ export default function PaymentsPage() {
     setLoading(false);
   }
 
+  function parseExcelDate(value: any): string | null {
+    if (!value) return null;
+    const str = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
+      const parts = str.split("/");
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    const num = Number(value);
+    if (!isNaN(num) && num > 1000) {
+      const date = new Date((num - 25569) * 86400 * 1000);
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+    return null;
+  }
+
   // ─── Load stats ───────────────────────────────────────────
   async function loadStats() {
-    // إجمالي الكل
+    // إجمالي الكل (كل الوقت)
     const { count: totalCount } = await supabase
       .from("payments").select("*", { count: "exact", head: true });
 
@@ -94,10 +126,13 @@ export default function PaymentsPage() {
       offset += 1000;
     }
 
-    // إجمالي الشهر المفلتر
-    let monthCount = 0;
-    let monthAmount = 0;
+    // ─── إحصائيات الشهر المفلتر ─────────────────────────
+    let monthCollected = 0;   // المحصل فعلاً
+    let monthRequired = 0;    // المطلوب (من الخطوط)
+    let monthCount = 0;       // عدد السدادات
+
     if (filterMonth) {
+      // 1. المحصل — من جدول payments
       const { count } = await supabase
         .from("payments").select("*", { count: "exact", head: true })
         .eq("payment_month", filterMonth);
@@ -109,9 +144,34 @@ export default function PaymentsPage() {
           .select("amount").eq("payment_month", filterMonth)
           .range(mOffset, mOffset + 999);
         if (!data || data.length === 0) break;
-        monthAmount += data.reduce((s, p) => s + (p.amount || 0), 0);
+        monthCollected += data.reduce((s, p) => s + (p.amount || 0), 0);
         if (data.length < 1000) break;
         mOffset += 1000;
+      }
+
+      // 2. المطلوب — إجمالي total_price حسب فلتر القسم
+      let lineQuery = supabase
+        .from("lines")
+        .select("total_price, departments(name)")
+        .or("is_deleted.is.null,is_deleted.eq.false")
+        .not("department_id", "is", null);
+
+      if (filterDepartment) {
+        lineQuery = lineQuery.eq("department_id", Number(filterDepartment));
+      }
+
+      let lOffset = 0;
+      while (true) {
+        const { data } = await lineQuery.range(lOffset, lOffset + 999);
+        if (!data || data.length === 0) break;
+
+        const filtered = filterDepartment
+          ? data // لو مختار قسم معين، خديه زي ما هو
+          : data.filter((l: any) => !EXCLUDED_DEPARTMENTS.includes(l.departments?.name || ""));
+
+        monthRequired += filtered.reduce((s: number, l: any) => s + (l.total_price || 0), 0);
+        if (data.length < 1000) break;
+        lOffset += 1000;
       }
     }
 
@@ -120,14 +180,25 @@ export default function PaymentsPage() {
       .from("payments").select("payment_code").limit(10000);
     setCodes([...new Set((codesData || []).map((p) => p.payment_code).filter(Boolean))]);
 
-    setStats({ totalCount: totalCount || 0, totalAmount, monthCount, monthAmount });
+    const monthUnpaid = monthRequired - monthCollected;
+    const collectionRate = monthRequired > 0 ? (monthCollected / monthRequired) * 100 : 0;
+
+    setStats({
+      totalCount: totalCount || 0,
+      totalAmount,
+      monthCount,
+      monthCollected,
+      monthRequired,
+      monthUnpaid: monthUnpaid > 0 ? monthUnpaid : 0,
+      collectionRate,
+    });
   }
 
   useEffect(() => { loadPayments(); loadStats(); }, []);
   useEffect(() => {
     const t = setTimeout(() => { loadPayments(); loadStats(); }, 300);
     return () => clearTimeout(t);
-  }, [search, filterMonth, filterCode, page]);
+  }, [search, filterMonth, filterCode, filterDepartment, page]);
 
   // ─── Import ───────────────────────────────────────────────
   async function importFromExcel() {
@@ -151,7 +222,7 @@ export default function PaymentsPage() {
           line_number: String(r["number"] || "").trim(),
           amount: Number(r["amount"] || 0),
           payment_code: String(r["payment_code"] || r["code"] || "").trim() || null,
-          trans_date: String(r["trans_date"] || "").trim() || null,
+          trans_date: parseExcelDate(r["trans_date"]),
           payment_month: importMonth,
         }));
 
@@ -249,29 +320,47 @@ export default function PaymentsPage() {
           </div>
         </div>
 
+        {/* Department filter for stats */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-4">
+          <label className="block text-xs text-slate-500 mb-1.5">فلتر القسم (لحساب الإحصائيات)</label>
+          <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
+            className="w-full md:w-72 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
+            <option value="">كل الأقسام (بدون SPOC، فوري، العهدة، هيثم)</option>
+            {departmentsList.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">إجمالي السدادات</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{stats.totalCount.toLocaleString()}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">إجمالي المبالغ</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">{stats.totalAmount.toLocaleString()}</p>
-            <p className="text-xs text-slate-400">جنيه</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">سدادات الشهر المحدد</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">
-              {filterMonth ? stats.monthCount.toLocaleString() : "—"}
-            </p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">مبالغ الشهر المحدد</p>
+            <p className="text-xs text-slate-500">إجمالي المطلوب (الشهر)</p>
             <p className="text-2xl font-bold text-purple-600 mt-1">
-              {filterMonth ? stats.monthAmount.toLocaleString() : "—"}
+              {filterMonth ? stats.monthRequired.toLocaleString() : "—"}
             </p>
             <p className="text-xs text-slate-400">جنيه</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+            <p className="text-xs text-slate-500">إجمالي المحصل (الشهر)</p>
+            <p className="text-2xl font-bold text-green-600 mt-1">
+              {filterMonth ? stats.monthCollected.toLocaleString() : "—"}
+            </p>
+            <p className="text-xs text-slate-400">جنيه</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+            <p className="text-xs text-slate-500">إجمالي الغير مسدد</p>
+            <p className="text-2xl font-bold text-red-500 mt-1">
+              {filterMonth ? stats.monthUnpaid.toLocaleString() : "—"}
+            </p>
+            <p className="text-xs text-slate-400">جنيه</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+            <p className="text-xs text-slate-500">نسبة التحصيل</p>
+            <p className="text-2xl font-bold text-blue-600 mt-1">
+              {filterMonth ? `${stats.collectionRate.toFixed(1)}%` : "—"}
+            </p>
+            <p className="text-xs text-slate-400">{stats.monthCount} سداد</p>
           </div>
         </div>
 

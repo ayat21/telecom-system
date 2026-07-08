@@ -5,10 +5,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Download, FileSpreadsheet, Trash2, RefreshCw, PlusCircle,
-  Loader2, CheckCircle2, XCircle, AlertTriangle, Database, ChevronDown, User,
+  Loader2, CheckCircle2, XCircle, AlertTriangle, Database, ChevronDown, User, Ban,
 } from "lucide-react";
 
-type ImportType = "full" | "bulk_update" | "bulk_delete" | "add_column" | "update_clients";
+type ImportType = "full" | "bulk_update" | "bulk_delete" | "add_column" | "update_clients" | "bulk_deactivate";
 
 interface ImportResult {
   status: "success" | "error";
@@ -23,9 +23,9 @@ interface RowError {
 }
 
 const UPDATABLE_COLUMNS: { key: string; label: string }[] = [
-  { key: "client_name", label: "اسم العميل" },        // ← جديد
-  { key: "national_id", label: "الرقم القومي" },       // ← جديد
-  { key: "address", label: "العنوان" },                // ← جديد
+  { key: "client_name", label: "اسم العميل" },
+  { key: "national_id", label: "الرقم القومي" },
+  { key: "address", label: "العنوان" },
   { key: "account_no", label: "رقم الأكونت (اسم)" },
   { key: "customer_date_real", label: "تاريخ العميل" },
   { key: "serial_number", label: "الرقم التسلسلي" },
@@ -123,6 +123,7 @@ function resolveRowSync(
 
   const clientName = str(row["client_name"]);
   const clientNationalId = str(row["national_id"]);
+  const clientAddress = str(row["address"]);
   let client_id: number | null = null;
   if (clientNationalId) client_id = cache.get(`clients_nid:${clientNationalId.toLowerCase()}`) ?? null;
   if (!client_id && clientName) client_id = cache.get(`clients:${clientName.toLowerCase()}`) ?? null;
@@ -194,6 +195,7 @@ function resolveRowSync(
     _hasErrors: rowErrors.length > 0,
     _client_name: clientName,
     _client_national_id: clientNationalId,
+    _client_address: clientAddress,
   };
 }
 
@@ -342,32 +344,81 @@ export default function ImportPage() {
           return;
         }
 
-        // أضيفي العملاء الجدد
         const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
-        const newClientNames = [...new Set(
-          records.filter(r => r._client_name).map(r => normalize(r._client_name))
-        )];
+        const clientKeyToData = new Map<string, { name: string; national_id: string | null; address: string | null }>();
 
-        if (newClientNames.length) {
-          setProgressText(`جارٍ معالجة ${newClientNames.length} عميل...`);
-          const { data: allClients } = await supabase.from("clients").select("id, name");
-          const existingMap = new Map<string, number>();
-          (allClients || []).forEach(c => existingMap.set(normalize(c.name), c.id));
-          const toInsert = newClientNames.filter(n => !existingMap.has(n));
-          for (let i = 0; i < toInsert.length; i += 500) {
-            const { data } = await supabase.from("clients")
-              .insert(toInsert.slice(i, i + 500).map(name => ({ name })))
-              .select("id, name");
-            (data || []).forEach(c => existingMap.set(normalize(c.name), c.id));
+        records.forEach(r => {
+          if (!r._client_name) return;
+          const key = r._client_national_id
+            ? `nid:${r._client_national_id.toLowerCase()}`
+            : `name:${normalize(r._client_name)}`;
+          if (!clientKeyToData.has(key)) {
+            clientKeyToData.set(key, {
+              name: r._client_name,
+              national_id: r._client_national_id || null,
+              address: r._client_address || null,
+            });
+          } else if (r._client_address && !clientKeyToData.get(key)!.address) {
+            clientKeyToData.get(key)!.address = r._client_address;
           }
+        });
+
+        if (clientKeyToData.size > 0) {
+          setProgressText(`جارٍ معالجة ${clientKeyToData.size} عميل...`);
+          const { data: allClients } = await supabase.from("clients").select("id, name, national_id");
+          const existingByName = new Map<string, number>();
+          const existingByNid = new Map<string, number>();
+          (allClients || []).forEach(c => {
+            existingByName.set(normalize(c.name), c.id);
+            if (c.national_id) existingByNid.set(c.national_id.toLowerCase(), c.id);
+          });
+
+          const toInsert: { key: string; name: string; national_id: string | null; address: string | null }[] = [];
+          const resolvedKeyToId = new Map<string, number>();
+
+          clientKeyToData.forEach((data, key) => {
+            if (data.national_id && existingByNid.has(data.national_id.toLowerCase())) {
+              resolvedKeyToId.set(key, existingByNid.get(data.national_id.toLowerCase())!);
+            } else if (!data.national_id && existingByName.has(normalize(data.name))) {
+              resolvedKeyToId.set(key, existingByName.get(normalize(data.name))!);
+            } else {
+              toInsert.push({ key, ...data });
+            }
+          });
+
+          if (toInsert.length > 0) {
+            for (let i = 0; i < toInsert.length; i += 500) {
+              const batch = toInsert.slice(i, i + 500);
+              const { data: created, error } = await supabase.from("clients")
+                .insert(batch.map(b => ({
+                  name: b.name,
+                  national_id: b.national_id,
+                  address: b.address,
+                })))
+                .select("id, name, national_id");
+
+              if (error) {
+                console.error("Insert clients error:", error.message);
+              }
+
+              (created || []).forEach((c, idx) => {
+                const originalKey = batch[idx].key;
+                resolvedKeyToId.set(originalKey, c.id);
+              });
+            }
+          }
+
           records.forEach(r => {
-            if (r._client_name) r.client_id = existingMap.get(normalize(r._client_name)) ?? null;
+            if (!r._client_name) return;
+            const key = r._client_national_id
+              ? `nid:${r._client_national_id.toLowerCase()}`
+              : `name:${normalize(r._client_name)}`;
+            r.client_id = resolvedKeyToId.get(key) ?? null;
           });
         }
 
         setProgressPercent(35);
 
-        // أضيفي الأكونتات الجديدة
         const newAccounts = [...new Map(
           records
             .filter((r) => r.account_no && r.provider_id && !r.account_id)
@@ -389,7 +440,7 @@ export default function ImportPage() {
         setProgressPercent(40);
 
         const unique = Array.from(new Map(records.map((r) => [r.number, r])).values())
-          .map(({ _hasErrors, _client_name, _client_national_id, ...rest }) => rest);
+          .map(({ _hasErrors, _client_name, _client_national_id, _client_address, ...rest }) => rest);
         const dupes = records.length - unique.length;
 
         setProgressText(`جارٍ رفع ${unique.length.toLocaleString()} سجل...`);
@@ -419,7 +470,6 @@ export default function ImportPage() {
         const hasNameCols = selectedColumns.some((c) => NAME_COLS.includes(c));
         const hasClientCols = selectedColumns.some((c) => CLIENT_COLS.includes(c));
 
-        // جيبي refData لو في name cols
         let refData: any = null;
         if (hasNameCols) {
           setProgressText("جارٍ تحميل الجداول المرجعية...");
@@ -448,7 +498,6 @@ export default function ImportPage() {
           }
         }
 
-        // ─── جيبي client_ids مرة واحدة ────────────────────────
         const clientIdMap = new Map<string, number>();
         if (hasClientCols) {
           setProgressText("جارٍ تحميل بيانات العملاء...");
@@ -499,7 +548,7 @@ export default function ImportPage() {
                   case "client_name":
                   case "national_id":
                   case "address":
-                    break; // بيتعالجوا في clients
+                    break;
                   default: updates[col] = row[col] || null;
                 }
               }
@@ -509,12 +558,10 @@ export default function ImportPage() {
               }
             }
 
-            // حدّثي lines لو في updates
             if (Object.keys(updates).length > 0) {
               await supabase.from("lines").update(updates).eq("number", number);
             }
 
-            // حدّثي clients من الـ map
             if (hasClientCols) {
               const clientFields: Record<string, any> = {};
               if (selectedColumns.includes("client_name") && String(row["client_name"] || "").trim())
@@ -524,19 +571,19 @@ export default function ImportPage() {
               if (selectedColumns.includes("address") && String(row["address"] || "").trim())
                 clientFields.address = String(row["address"]).trim();
 
-      if (Object.keys(clientFields).length > 0) {
-  const clientId = clientIdMap.get(number);
-  if (clientId) {
-    if (clientFields.national_id) {
-      await supabase
-        .from("clients")
-        .update({ national_id: null })
-        .eq("national_id", clientFields.national_id)
-        .neq("id", clientId);
-    }
-    await supabase.from("clients").update(clientFields).eq("id", clientId);
-  }
-}
+              if (Object.keys(clientFields).length > 0) {
+                const clientId = clientIdMap.get(number);
+                if (clientId) {
+                  if (clientFields.national_id) {
+                    await supabase
+                      .from("clients")
+                      .update({ national_id: null })
+                      .eq("national_id", clientFields.national_id)
+                      .neq("id", clientId);
+                  }
+                  await supabase.from("clients").update(clientFields).eq("id", clientId);
+                }
+              }
             }
           }));
           setProgressPercent(Math.round(((i + 500) / rows.length) * 100));
@@ -550,7 +597,7 @@ export default function ImportPage() {
         });
       }
 
-      // ─── إلغاء مجمع ───────────────────────────────────────
+      // ─── إلغاء مجمع (حذف كامل) ───────────────────────────
       else if (importType === "bulk_delete") {
         const numbers = rows.map((r) => String(r["number"] || "").trim()).filter(Boolean);
         setProgressText(`جارٍ حفظ بيانات ${numbers.length} خط في السجل...`);
@@ -596,6 +643,103 @@ export default function ImportPage() {
         });
       }
 
+      // ─── Deactivate مجمع (زي زرار Deactive الفردي بس على مجموعة أرقام) ───
+      else if (importType === "bulk_deactivate") {
+        const numbers = rows.map((r) => String(r["number"] || "").trim()).filter(Boolean);
+        setProgressText(`جارٍ جلب بيانات ${numbers.length} خط...`);
+
+        const nowIso = new Date().toISOString();
+        const userName = localStorage.getItem("full_name") || "Unknown";
+
+        let deactivatedCount = 0;
+        let notFoundCount = 0;
+        let alreadyDeactiveCount = 0;
+
+        for (let i = 0; i < numbers.length; i += 300) {
+          const batchNumbers = numbers.slice(i, i + 300);
+
+          // جيبي بيانات الخطوط الحالية (قبل المسح) في batch
+          const { data: existingLines, error: fetchError } = await supabase
+            .from("lines")
+            .select("id, number, client_id, almanafiz_id, heiaat_id, customer_date_real, is_deactive, clients(name, national_id, address), almanafiz(name), heiaat(name)")
+            .in("number", batchNumbers);
+
+          if (fetchError) throw new Error(fetchError.message);
+
+          const foundNumbers = new Set((existingLines || []).map((l: any) => l.number));
+          notFoundCount += batchNumbers.filter((n) => !foundNumbers.has(n)).length;
+
+          const toProcess = (existingLines || []).filter((l: any) => !l.is_deactive);
+          alreadyDeactiveCount += (existingLines || []).filter((l: any) => l.is_deactive).length;
+
+          if (toProcess.length === 0) {
+            setProgressPercent(Math.round((Math.min(i + 300, numbers.length) / numbers.length) * 100));
+            continue;
+          }
+
+          // حضّري سجلات history + audit_logs
+          const historyRecords = toProcess.map((line: any) => ({
+            number: line.number,
+            customer_name: line.clients?.name || null,
+            national_id: line.clients?.national_id || null,
+            address: line.clients?.address || null,
+            almanafiz: line.almanafiz?.name || line.heiaat?.name || null,
+            action_type: "deactivated",
+            action_date: nowIso,
+          }));
+
+          const auditRecords = toProcess.map((line: any) => ({
+            user_name: userName,
+            action_type: "DEACTIVATE",
+            table_name: "lines",
+            record_id: String(line.id),
+            old_data: {
+              client: { old: line.clients?.name || "—", new: "—" },
+              almanafiz: { old: line.almanafiz?.name || line.heiaat?.name || "—", new: "—" },
+              customer_date: { old: line.customer_date_real || "—", new: "—" },
+            },
+          }));
+
+          if (historyRecords.length > 0) {
+            const { error } = await supabase.from("history").insert(historyRecords);
+            if (error) throw new Error(error.message);
+          }
+          if (auditRecords.length > 0) {
+            const { error } = await supabase.from("audit_logs").insert(auditRecords);
+            if (error) throw new Error(error.message);
+          }
+
+          // حدّثي كل خط بالمدة الصحيحة بتاعته (durationDays بيختلف حسب customer_date_real)
+          await Promise.all(toProcess.map(async (line: any) => {
+            let durationDays: number | null = null;
+            if (line.customer_date_real) {
+              const customerDate = new Date(line.customer_date_real);
+              const diffMs = new Date(nowIso).getTime() - customerDate.getTime();
+              durationDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            }
+            await supabase.from("lines").update({
+              client_id: null,
+              almanafiz_id: null,
+              heiaat_id: null,
+              customer_date_real: null,
+              is_deactive: true,
+              deactive_date: nowIso,
+              active_duration_days: durationDays,
+            }).eq("id", line.id);
+          }));
+
+          deactivatedCount += toProcess.length;
+          setProgressPercent(Math.round((Math.min(i + 300, numbers.length) / numbers.length) * 100));
+          setProgressText(`تم إلغاء تفعيل ${deactivatedCount.toLocaleString()} من ${numbers.length.toLocaleString()}...`);
+        }
+
+        setResult({
+          status: "success",
+          message: "تم إلغاء تفعيل الخطوط بنجاح ✅",
+          details: `تم إلغاء التفعيل: ${deactivatedCount} | ملغاة بالفعل: ${alreadyDeactiveCount} | غير موجودة: ${notFoundCount}`,
+        });
+      }
+
       // ─── رفع عمود جديد ────────────────────────────────────
       else if (importType === "add_column") {
         setProgressText("جارٍ تحميل الجداول المرجعية...");
@@ -631,7 +775,7 @@ export default function ImportPage() {
         for (let i = 0; i < records.length; i += 100) {
           const batch = records.slice(i, i + 100);
           await Promise.all(batch.map(async (resolved) => {
-            const { number: num, _hasErrors, _client_name, _client_national_id, ...rest } = resolved;
+            const { number: num, _hasErrors, _client_name, _client_national_id, _client_address, ...rest } = resolved;
             const cleanUpdates = Object.fromEntries(
               Object.entries(rest).filter(([, v]) => v !== null && v !== "" && v !== 0)
             );
@@ -663,7 +807,6 @@ export default function ImportPage() {
             const number = String(row["number"] || "").trim();
             if (!number) return;
 
-            // جيبي الـ client_id من الخط
             const { data: lineData } = await supabase
               .from("lines")
               .select("client_id")
@@ -672,7 +815,6 @@ export default function ImportPage() {
 
             if (!lineData?.client_id) { notFound++; return; }
 
-            // حضّري التحديثات
             const updates: Record<string, any> = {};
             const clientName = String(row["client_name"] || "").trim();
             const nationalId = String(row["national_id"] || "").trim();
@@ -715,7 +857,8 @@ export default function ImportPage() {
   const operations = [
     { key: "full" as ImportType, icon: <FileSpreadsheet className="w-4 h-4" />, title: "استيراد كامل", desc: "رفع كل بيانات الخطوط بالأسماء" },
     { key: "bulk_update" as ImportType, icon: <RefreshCw className="w-4 h-4" />, title: "تغيير مجمع", desc: "تحديث أعمدة محددة لخطوط موجودة" },
-    { key: "bulk_delete" as ImportType, icon: <Trash2 className="w-4 h-4" />, title: "إلغاء مجمع", desc: "تعليم خطوط كمحذوفة" },
+    { key: "bulk_deactivate" as ImportType, icon: <Ban className="w-4 h-4" />, title: "Deactivate مجمع", desc: "إلغاء تفعيل خطوط (زي زرار Deactive) مع الاحتفاظ بالقسم والجروب" },
+    { key: "bulk_delete" as ImportType, icon: <Trash2 className="w-4 h-4" />, title: "إلغاء مجمع", desc: "تعليم خطوط كمحذوفة (يمسح القسم والجروب والأكونت)" },
     { key: "add_column" as ImportType, icon: <PlusCircle className="w-4 h-4" />, title: "رفع عمود جديد", desc: "إضافة بيانات عمود لخطوط موجودة" },
     { key: "update_clients" as ImportType, icon: <User className="w-4 h-4" />, title: "تحديث بيانات العملاء", desc: "تحديث الاسم والرقم القومي والعنوان" },
   ];
@@ -736,7 +879,6 @@ export default function ImportPage() {
 
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-6">
 
-          {/* Operation selector */}
           <div>
             <label className="block text-sm font-medium text-slate-600 mb-3">نوع الإجراء</label>
             <div className="grid grid-cols-2 gap-3">
@@ -762,7 +904,6 @@ export default function ImportPage() {
             </div>
           </div>
 
-          {/* Column selector */}
           {importType === "bulk_update" && (
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-2">الأعمدة المراد تحديثها</label>
@@ -801,7 +942,6 @@ export default function ImportPage() {
             </div>
           )}
 
-          {/* File upload */}
           <div>
             <label className="block text-sm font-medium text-slate-600 mb-2">ملف Excel</label>
             <label className={`flex items-center gap-3 border-2 border-dashed rounded-xl px-4 py-5 cursor-pointer transition ${
@@ -816,10 +956,13 @@ export default function ImportPage() {
             </label>
             <div className="mt-2 text-xs text-slate-400">
               {importType === "full" && (
-                <p>الأعمدة: <span className="font-mono">number, provider_name, account_no, almanafiz_name, agent_name, client_name, national_id, line_status_name, calls_package_name, internet_package_name, line_extension_name, calls_package_price, internet_package_price, line_extension_price, has_sim, serial_number, customer_date_real, note, report_note</span></p>
+                <p>الأعمدة: <span className="font-mono">number, provider_name, account_no, almanafiz_name, agent_name, client_name, national_id, address, line_status_name, calls_package_name, internet_package_name, line_extension_name, calls_package_price, internet_package_price, line_extension_price, has_sim, serial_number, customer_date_real, note, report_note</span></p>
               )}
               {importType === "bulk_update" && <p>الأعمدة: <span className="font-mono">number</span> + الأعمدة المحددة فوق</p>}
               {importType === "bulk_delete" && <p>الأعمدة: <span className="font-mono">number</span> فقط</p>}
+              {importType === "bulk_deactivate" && (
+                <p>الأعمدة: <span className="font-mono">number</span> فقط — هيمسح العميل والمنفذ وتاريخ العميل، ويحتفظ بالقسم والجروب والأكونت، ويسجل التاريخ والمدة للعمولة</p>
+              )}
               {importType === "add_column" && <p>الأعمدة: <span className="font-mono">number</span> + العمود الجديد بالاسم</p>}
               {importType === "update_clients" && (
                 <p>الأعمدة: <span className="font-mono">number</span> + <span className="font-mono">client_name</span> (اختياري) + <span className="font-mono">national_id</span> (اختياري) + <span className="font-mono">address</span> (اختياري)</p>
@@ -827,7 +970,6 @@ export default function ImportPage() {
             </div>
           </div>
 
-          {/* Action button */}
           <button onClick={importData} disabled={loading}
             className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl px-6 py-3.5 font-medium transition">
             {loading
@@ -835,7 +977,6 @@ export default function ImportPage() {
               : <><Download className="w-4 h-4" />تنفيذ الإجراء</>}
           </button>
 
-          {/* Progress */}
           {loading && (
             <div>
               <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
@@ -849,7 +990,6 @@ export default function ImportPage() {
             </div>
           )}
 
-          {/* Result */}
           {result && !loading && (
             <div className={`rounded-xl border p-4 flex items-start gap-3 ${
               result.status === "success" ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
