@@ -19,6 +19,7 @@ const LINE_EXPORT_SELECT = `
   providers(name),
   accounts(account_no, account_name),
   almanafiz(name),
+  heiaat(name),
   agents(name),
   departments(name),
   groups(name),
@@ -27,6 +28,11 @@ const LINE_EXPORT_SELECT = `
   internet_packages(package_name),
   line_extensions(extension_name)
 `;
+
+// المنفذ ممكن يكون منافذ عادية أو هيئة أو مجرد قسم (زي Spoc) من غير منفذ محدد
+function getMenfazName(line: any): string | null {
+  return line.almanafiz?.name || line.heiaat?.name || line.departments?.name || null;
+}
 
 function lineToExcelRow(line: any) {
   return {
@@ -38,7 +44,7 @@ function lineToExcelRow(line: any) {
     الشبكة: line.providers?.name,
     الأكونت: line.accounts?.account_no,
     اسم_الأكونت: line.accounts?.account_name,
-    المنفذ: line.almanafiz?.name,
+    المنفذ: getMenfazName(line),
     المندوب: line.agents?.name,
     القسم: line.departments?.name,
     الجروب: line.groups?.name,
@@ -121,6 +127,8 @@ export default function LinesPage() {
       clients(name),
       providers(name),
       almanafiz(name),
+      heiaat(name),
+      departments(name),
       calls_packages(package_name),
       line_statuses(name)
     `)
@@ -601,7 +609,7 @@ if (search.trim()) {
               { key: "number", label: "الرقم", className: "font-medium text-slate-900" },
               { label: "العميل", render: (r) => r.clients?.name || "—" },
               { key: "customer_date_real", label: "التاريخ" },
-              { label: "المنفذ", render: (r) => r.almanafiz?.name || "—" },
+              { label: "المنفذ", render: (r) => getMenfazName(r) || "—" },
               { label: "الشبكة", render: (r) => <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{r.providers?.name || "—"}</span> },
               { label: "حالة الخط", render: (r) => r.line_statuses?.name ? <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700">{r.line_statuses.name}</span> : "—" },
               { label: "باقة المكالمات", render: (r) => r.calls_packages?.package_name || "—" },

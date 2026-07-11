@@ -7,13 +7,13 @@ import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import {
   CreditCard, Download, Search, Loader2, Check, X,
-  ChevronLeft, ChevronRight, Cloud, UserCheck, UserX, Percent, Network,
+  ChevronLeft, ChevronRight, Cloud, UserCheck, UserX, Percent, Network, Calendar,
 } from "lucide-react";
 
 const PAGE_SIZE = 50;
 
 // الأقسام المستبعدة لما "كل الأقسام" مختارة
-const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
+const EXCLUDED_DEPARTMENTS = ["SPOC", "العهدة", "هيثم"];
 
 // رابط Google Sheet المنشور كـ CSV
 const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS9OSpK1_ukTAgEP8emp5epTtdcCA1-a4iDSQ375wo6n_4sNaXVNwfwM-tfdrddrpU0P4TTElhCDHGG/pub?gid=1700747738&single=true&output=csv";
@@ -59,6 +59,8 @@ export default function PaymentsPage() {
 
   // نطاق الأرقام المسموح بيها حسب فلتر القسم/الشبكة (لتفليتر الجدول)
   const [scopedNumbers, setScopedNumbers] = useState<string[] | null>(null); // null = بدون فلتر (كل الأرقام)
+  // كاش لسدادات النطاق المفلتر (بنفلتر ونرقّم الصفحات محلياً بدل .in() طويل جداً)
+  const [scopedPayments, setScopedPayments] = useState<any[] | null>(null);
 
   // Stats
   const [statsLoading, setStatsLoading] = useState(false);
@@ -74,6 +76,7 @@ export default function PaymentsPage() {
   const [exportingUnpaid, setExportingUnpaid] = useState(false);
 
   // Import (Google Sheet)
+  const [sheetImportMonth, setSheetImportMonth] = useState("");
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetProgress, setSheetProgress] = useState(0);
   const [sheetText, setSheetText] = useState("");
@@ -98,13 +101,32 @@ export default function PaymentsPage() {
   }, []);
 
   // ─── Load payments (الجدول) — بيراعي فلتر القسم/الشبكة ────
-  async function loadPayments(numbersScope: string[] | null) {
+  async function loadPayments(numbersScope: string[] | null, scopedPaymentsList: any[] | null) {
     setLoading(true);
 
-    // لو في فلتر قسم/شبكة ومفيش أي أرقام تطابقه، رجّعي نتيجة فاضية على طول
     if (numbersScope !== null && numbersScope.length === 0) {
       setPayments([]);
       setTotal(0);
+      setLoading(false);
+      return;
+    }
+
+    // فيه فلتر قسم/شبكة نشط — بنفلتر ونرقّم الصفحات محلياً بدل ما نبعت .in() بآلاف
+    // الأرقام (بيولّد URL طويل جداً وبيرجع 414 من السيرفر ويفشل بصمت)
+    if (numbersScope !== null) {
+      let filtered = scopedPaymentsList || [];
+      if (search.trim()) {
+        const s = search.trim().toLowerCase();
+        filtered = filtered.filter((p) =>
+          (p.line_number || "").toLowerCase().includes(s) ||
+          (p.billing_account_number || "").toLowerCase().includes(s)
+        );
+      }
+      if (filterCode) filtered = filtered.filter((p) => p.payment_code === filterCode);
+      filtered = [...filtered].sort((a, b) => b.id - a.id);
+
+      setTotal(filtered.length);
+      setPayments(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
       setLoading(false);
       return;
     }
@@ -119,10 +141,9 @@ export default function PaymentsPage() {
       query = query.or(`line_number.ilike.%${search}%,billing_account_number.ilike.%${search}%`);
     if (filterCode)
       query = query.eq("payment_code", filterCode);
-    if (numbersScope !== null)
-      query = query.in("line_number", numbersScope);
 
-    const { data, count } = await query;
+    const { data, count, error } = await query;
+    if (error) { console.error(error); setPayments([]); setTotal(0); setLoading(false); return; }
     setPayments(data || []);
     setTotal(count || 0);
     setLoading(false);
@@ -177,12 +198,6 @@ export default function PaymentsPage() {
     return null;
   }
 
-  function getMonthFromDate(dateStr: string | null): string | null {
-    if (!dateStr) return null;
-    const m = dateStr.match(/^(\d{4})-(\d{2})/);
-    return m ? `${m[1]}-${m[2]}` : null;
-  }
-
   // ─── جيبي أرقام الخطوط اللي جوا نطاق القسم/الشبكة ─────────
   async function loadScopedLines(): Promise<{ number: string; total_price: number }[]> {
     let lineQuery = supabase
@@ -221,14 +236,16 @@ export default function PaymentsPage() {
     const totalRequired = departmentLines.reduce((s, l) => s + l.total_price, 0);
 
     const paidAmountByLine = new Map<string, number>();
+    const scopedPaymentsList: any[] = [];
     let pOffset = 0;
     while (true) {
-      const { data } = await supabase.from("payments").select("line_number, amount")
+      const { data } = await supabase.from("payments").select("*")
         .range(pOffset, pOffset + 999);
       if (!data || data.length === 0) break;
       data.forEach((p: any) => {
         if (!lineNumberSet.has(p.line_number)) return;
         paidAmountByLine.set(p.line_number, (paidAmountByLine.get(p.line_number) || 0) + (p.amount || 0));
+        if (hasFilter) scopedPaymentsList.push(p);
       });
       if (data.length < 1000) break;
       pOffset += 1000;
@@ -256,16 +273,18 @@ export default function PaymentsPage() {
     setCodes([...new Set((codesData || []).map((p) => p.payment_code).filter(Boolean))]);
 
     const numbersScope = hasFilter ? [...lineNumberSet] : null;
+    const paymentsForScope = hasFilter ? scopedPaymentsList : null;
     setScopedNumbers(numbersScope);
+    setScopedPayments(paymentsForScope);
     setStatsLoading(false);
-    return numbersScope;
+    return { numbersScope, scopedPayments: paymentsForScope };
   }
 
   // أول تحميل
   useEffect(() => {
     (async () => {
-      const scope = await loadStatsAndScope();
-      loadPayments(scope);
+      const { numbersScope, scopedPayments } = await loadStatsAndScope();
+      loadPayments(numbersScope, scopedPayments);
     })();
   }, []);
 
@@ -273,19 +292,21 @@ export default function PaymentsPage() {
   useEffect(() => {
     (async () => {
       setPage(1);
-      const scope = await loadStatsAndScope();
-      loadPayments(scope);
+      const { numbersScope, scopedPayments } = await loadStatsAndScope();
+      loadPayments(numbersScope, scopedPayments);
     })();
   }, [filterDepartment, filterProvider]);
 
   // تغيير البحث/الكود/الصفحة → إعادة تحميل الجدول بس بنفس النطاق الحالي
   useEffect(() => {
-    const t = setTimeout(() => loadPayments(scopedNumbers), 300);
+    const t = setTimeout(() => loadPayments(scopedNumbers, scopedPayments), 300);
     return () => clearTimeout(t);
   }, [search, filterCode, page]);
 
   // ─── Import من Google Sheet (upsert لمنع التكرار) ─────────
   async function importFromGoogleSheet() {
+    if (!sheetImportMonth) { alert("اختاري شهر السداد أولاً"); return; }
+
     setSheetImporting(true);
     setSheetProgress(0);
     setSheetText("جارٍ تحميل الشيت...");
@@ -310,16 +331,16 @@ export default function PaymentsPage() {
         const dateStr = parseSheetDate(rawDate);
         if (!dateStr) return;
 
-        const month = getMonthFromDate(dateStr);
         const sheetKey = `${number}|${rawDate}`;
 
         records.push({
           line_number: number,
           amount: Number(r["المبلغ"] || 0),
-          // طريقة السداد الصح بتيجي من عمود "طريقه السداد" مش "manfaz"
+          // طريقة السداد الصح بتيجي من عمود "طريقه السداد"
           payment_code: String(r["طريقه السداد"] || "").trim() || null,
           trans_date: dateStr,
-          payment_month: month,
+          // شهر السداد بيتحدد يدوياً من السيليكت مش من التاريخ
+          payment_month: sheetImportMonth,
           note: String(r["نوت"] || "").trim() || null,
           remaining: r["المتبقى"] !== undefined && r["المتبقى"] !== "" ? Number(r["المتبقى"]) : null,
           sheet_key: sheetKey,
@@ -367,10 +388,10 @@ export default function PaymentsPage() {
 
       setSheetResult({
         status: "success",
-        message: `تم رفع/تحديث ${uniqueRecords.length} سداد من الشيت بنجاح`,
+        message: `تم رفع/تحديث ${uniqueRecords.length} سداد لشهر ${sheetImportMonth} بنجاح`,
       });
-      const scope = await loadStatsAndScope();
-      loadPayments(scope);
+      const { numbersScope, scopedPayments } = await loadStatsAndScope();
+      loadPayments(numbersScope, scopedPayments);
     } catch (err) {
       setSheetResult({
         status: "error",
@@ -401,11 +422,19 @@ export default function PaymentsPage() {
 
   // ─── Export الجدول ────────────────────────────────────────
   async function exportToExcel() {
-    let query = supabase.from("payments").select("*").order("id", { ascending: false });
-    if (filterCode) query = query.eq("payment_code", filterCode);
-    if (scopedNumbers !== null) query = query.in("line_number", scopedNumbers);
+    let data: any[] | null;
 
-    const { data } = await query.limit(100000);
+    if (scopedNumbers !== null) {
+      // فيه فلتر قسم/شبكة نشط — بنستخدم الكاش المحلي بدل .in() طويل جداً
+      data = filterCode
+        ? (scopedPayments || []).filter((p) => p.payment_code === filterCode)
+        : scopedPayments;
+    } else {
+      let query = supabase.from("payments").select("*").order("id", { ascending: false });
+      if (filterCode) query = query.eq("payment_code", filterCode);
+      const { data: rows } = await query.limit(100000);
+      data = rows;
+    }
     if (!data) return;
 
     const rows = data.map((p) => ({
@@ -511,13 +540,19 @@ export default function PaymentsPage() {
               استيراد من Google Sheet
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <button onClick={importFromGoogleSheet} disabled={sheetImporting}
+              <div className="relative">
+                <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input type="month" value={sheetImportMonth}
+                  onChange={(e) => setSheetImportMonth(e.target.value)}
+                  className="border border-slate-200 bg-slate-50 rounded-xl pr-10 pl-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
+              </div>
+              <button onClick={importFromGoogleSheet} disabled={sheetImporting || !sheetImportMonth}
                 className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
                 {sheetImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
-                استيراد / تحديث كل السدادات من الشيت
+                استيراد / تحديث السدادات من الشيت
               </button>
               <p className="text-xs text-slate-400">
-                آمن للتكرار — ينفع تدوسيه كل يوم، وهيحدث الموجود بدل ما يكرره
+                اختاري الشهر الأول — هيتطبق على كل السدادات اللي بتترفع في العملية دي
               </p>
             </div>
 

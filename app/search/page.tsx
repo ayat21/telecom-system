@@ -8,7 +8,7 @@ import {
   Search, Download, Loader2, X, PhoneCall,
   User, Network, Package, Tag, Calendar,
   DollarSign, Hash, Plug, Briefcase, Building2,
-  ListTree, CreditCard, ScanLine, StickyNote,
+  ListTree, CreditCard, ScanLine, StickyNote, CheckCircle2, XCircle,
 } from "lucide-react";
 
 export default function SearchPage() {
@@ -18,6 +18,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [searched, setSearched] = useState(false);
+  const [paymentsByNumber, setPaymentsByNumber] = useState<Map<string, any[]>>(new Map());
 
   useEffect(() => {
     const role = localStorage.getItem("role");
@@ -68,6 +69,23 @@ export default function SearchPage() {
       .or("is_deleted.is.null,is_deleted.eq.false");
 
     if (!error) setResults(data || []);
+
+    // جيبي بيانات السداد لكل الأرقام (على دفعات تحسباً لعدد كبير من الأرقام)
+    const paymentsMap = new Map<string, any[]>();
+    for (let i = 0; i < numbers.length; i += 500) {
+      const batch = numbers.slice(i, i + 500);
+      const { data: pays } = await supabase
+        .from("payments")
+        .select("*")
+        .in("line_number", batch);
+      (pays || []).forEach((p) => {
+        const arr = paymentsMap.get(p.line_number) || [];
+        arr.push(p);
+        paymentsMap.set(p.line_number, arr);
+      });
+    }
+    setPaymentsByNumber(paymentsMap);
+
     setLoading(false);
   }
 
@@ -230,7 +248,11 @@ export default function SearchPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                {results.map((line) => (
+                {results.map((line) => {
+                  const pays = paymentsByNumber.get(line.number) || [];
+                  const isPaid = pays.length > 0;
+                  const totalPaid = pays.reduce((s, p) => s + (p.amount || 0), 0);
+                  return (
                   <div key={line.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
 
                     {/* Card Header */}
@@ -240,7 +262,15 @@ export default function SearchPage() {
                           <PhoneCall className="w-5 h-5 text-white" />
                         </span>
                         <div>
-                          <p className="text-white font-bold text-lg font-mono">{line.number}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-white font-bold text-lg font-mono">{line.number}</p>
+                            <span className={`flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                              isPaid ? "bg-green-500/25 text-green-50" : "bg-red-500/25 text-red-50"
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${isPaid ? "bg-green-400" : "bg-red-400"}`} />
+                              {isPaid ? "مسدد" : "غير مسدد"}
+                            </span>
+                          </div>
                           <p className="text-blue-100 text-xs">
                             {(line.providers as any)?.name || "—"}
                           </p>
@@ -309,6 +339,47 @@ export default function SearchPage() {
                       )}
                     </div>
 
+                    {/* بيانات السداد */}
+                    <div className="border-t border-slate-100 px-5 py-4">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 mb-2">
+                        {isPaid ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <XCircle className="w-3.5 h-3.5 text-red-500" />}
+                        بيانات السداد
+                        {isPaid && (
+                          <span className="text-green-600 font-normal">
+                            (إجمالي المسدد: {totalPaid.toLocaleString()} جنيه)
+                          </span>
+                        )}
+                      </div>
+                      {pays.length === 0 ? (
+                        <p className="text-xs text-slate-400">لا توجد سدادات مسجلة لهذا الخط</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead className="text-slate-400">
+                              <tr>
+                                <th className="text-right py-1 pl-3 font-medium">المبلغ</th>
+                                <th className="text-right py-1 pl-3 font-medium">طريقة السداد</th>
+                                <th className="text-right py-1 pl-3 font-medium">شهر السداد</th>
+                                <th className="text-right py-1 pl-3 font-medium">تاريخ العملية</th>
+                                <th className="text-right py-1 pl-3 font-medium">المتبقي</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pays.map((p) => (
+                                <tr key={p.id} className="border-t border-slate-50">
+                                  <td className="py-1.5 pl-3 font-semibold text-green-600">{(p.amount || 0).toLocaleString()} جنيه</td>
+                                  <td className="py-1.5 pl-3 text-slate-600">{p.payment_code || "—"}</td>
+                                  <td className="py-1.5 pl-3 text-slate-600">{p.payment_month || "—"}</td>
+                                  <td className="py-1.5 pl-3 text-slate-400">{p.trans_date || "—"}</td>
+                                  <td className="py-1.5 pl-3 text-slate-600">{p.remaining != null ? p.remaining.toLocaleString() : "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
                     {/* إجمالي */}
                     <div className="bg-slate-50 border-t border-slate-100 px-5 py-3 flex items-center justify-between">
                       <div className="flex items-center gap-4 text-xs text-slate-500">
@@ -322,7 +393,8 @@ export default function SearchPage() {
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>

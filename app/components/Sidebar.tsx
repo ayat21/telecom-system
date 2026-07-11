@@ -41,6 +41,7 @@ const iconMap: Record<string, React.ElementType> = {
   "تقرير المبيعات":        TrendingUp,
   "تقرير ارقام الحساب":    FileBarChart2,
   "تقريرالعموله":          Percent,
+   "حساب المنافذ":          Percent,
   "الاقسام والمنافذ":      Building2,
   "إدارة المستخدمين":      ShieldCheck,
 };
@@ -78,6 +79,7 @@ export default function Sidebar() {
     ...(role !== "viewer" ? [{ name: "المدفوعات", href: "/payments" }] : []),
     ...(role !== "viewer" ? [{ name: "البحث", href: "/search" }] : []),
     ...(role !== "viewer" ? [{ name: "الحالات", href: "/status" }] : []),
+    ...(role !== "viewer" ? [{ name: "حساب المنافذ", href: "/reports/manafiz-account" }] : []),
     ...(role !== "viewer" ? [{ name: "التحصيل", href: "/collection" }] : []),
     ...(role !== "viewer" ? [{ name: "تقرير ارقام الحساب", href: "/reports/accounts" }] : []),
     ...(role !== "viewer" ? [{ name: "تقريرالعموله", href: "/reports/commession" }] : []),
