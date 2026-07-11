@@ -8,39 +8,41 @@ import {
   PhoneCall,
   PlusCircle,
   Package,
-  FileSpreadsheet,
+  FileText,
   Users,
   Network,
   ShieldCheck,
-  Activity,
+  ListChecks,
   ChevronsRight,
   ChevronsLeft,
   LogOut,
-  FileText,
   Building2,
-  BarChart2,
   Percent,
   Upload,
   CreditCard,
+  Search,
+  Wallet,
+  TrendingUp,
+  FileBarChart2,
 } from "lucide-react";
 
 const iconMap: Record<string, React.ElementType> = {
-  "الرئيسية":            LayoutDashboard,
-  "الخطوط":              PhoneCall,
-  "إضافة خط":            PlusCircle,
-  "الباقات والخدمات":    Package,
-  "استيراد Excel":       Upload,
-  "الكشوفات Excel":      FileText,
-  "العملاء":             Users,
-  "الحالات":             Activity,
-   "التحصيل":             Activity,
-  "البحث":             Activity,
+  "الرئيسية":              LayoutDashboard,
+  "الخطوط":                PhoneCall,
+  "إضافة خط":              PlusCircle,
+  "الباقات والخدمات":      Package,
+  "استيراد Excel":         Upload,
+  "الكشوفات":              FileText,
+  "العملاء":               Users,
+  "الحالات":               ListChecks,
+  "التحصيل":               Wallet,
+  "البحث":                 Search,
   "المدفوعات":             CreditCard,
-  "تقرير المبيعات":             Activity,
-  "تقرير ارقام الحساب":  CreditCard,
-  "تقريرالعموله":        Percent,
-  "الاقسام والمنافذ":    Building2,
-  "إدارة المستخدمين":    ShieldCheck,
+  "تقرير المبيعات":        TrendingUp,
+  "تقرير ارقام الحساب":    FileBarChart2,
+  "تقريرالعموله":          Percent,
+  "الاقسام والمنافذ":      Building2,
+  "إدارة المستخدمين":      ShieldCheck,
 };
 
 function getMenuIcon(name: string): React.ElementType {
@@ -71,7 +73,7 @@ export default function Sidebar() {
     ...(role !== "viewer" ? [{ name: "إضافة خط", href: "/lines/new" }] : []),
     { name: "الباقات والخدمات", href: "/packages" },
     ...(role !== "viewer" ? [{ name: "استيراد Excel", href: "/import" }] : []),
-    ...(role !== "viewer" ? [{ name: "الكشوفات ", href: "/kshofat" }] : []),
+    ...(role !== "viewer" ? [{ name: "الكشوفات", href: "/kshofat" }] : []),
     ...(role !== "viewer" ? [{ name: "العملاء", href: "/clients" }] : []),
     ...(role !== "viewer" ? [{ name: "المدفوعات", href: "/payments" }] : []),
     ...(role !== "viewer" ? [{ name: "البحث", href: "/search" }] : []),
@@ -79,7 +81,7 @@ export default function Sidebar() {
     ...(role !== "viewer" ? [{ name: "التحصيل", href: "/collection" }] : []),
     ...(role !== "viewer" ? [{ name: "تقرير ارقام الحساب", href: "/reports/accounts" }] : []),
     ...(role !== "viewer" ? [{ name: "تقريرالعموله", href: "/reports/commession" }] : []),
-     ...(role !== "viewer" ? [{ name: "تقريرالمبيعات", href: "/reports/sales" }] : []),
+    ...(role !== "viewer" ? [{ name: "تقرير المبيعات", href: "/reports/sales" }] : []),
     ...(role !== "viewer" ? [{ name: "الاقسام والمنافذ", href: "/manafiz" }] : []),
     ...(role === "super_admin" ? [{ name: "إدارة المستخدمين", href: "/users" }] : []),
   ];
@@ -100,20 +102,20 @@ export default function Sidebar() {
               إدارة الخطوط • المبيعات • الباقات • التقارير
             </p>
             <div className="mt-3 bg-slate-800/70 rounded-xl p-3 border border-slate-700/50">
-  <div className="flex items-center justify-between">
-    <div className="flex items-center gap-2 min-w-0">
-      <span className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold shrink-0">
-        {fullName?.charAt(0) || "?"}
-      </span>
-      <p className="font-medium text-xs truncate text-slate-200">{fullName}</p>
-    </div>
-    <button onClick={handleLogout}
-      title="تسجيل الخروج"
-      className="shrink-0 w-7 h-7 flex items-center justify-center bg-red-600/80 hover:bg-red-600 rounded-lg transition-colors mr-1">
-      <LogOut className="w-3.5 h-3.5" />
-    </button>
-  </div>
-</div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold shrink-0">
+                    {fullName?.charAt(0) || "?"}
+                  </span>
+                  <p className="font-medium text-xs truncate text-slate-200">{fullName}</p>
+                </div>
+                <button onClick={handleLogout}
+                  title="تسجيل الخروج"
+                  className="shrink-0 w-7 h-7 flex items-center justify-center bg-red-600/80 hover:bg-red-600 rounded-lg transition-colors mr-1">
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
           </>
         )}
         <button onClick={() => setCollapsed(!collapsed)}

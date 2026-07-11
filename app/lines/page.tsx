@@ -8,9 +8,54 @@ import { useRouter } from "next/navigation";
 import {
   PhoneCall, Wifi, Signal, Radio, PlusCircle, Download,
   Search, Filter, Calendar, Network, Eye, Pencil, Trash2,
-  ChevronRight, ChevronLeft, Loader2,
+  ChevronRight, ChevronLeft, Loader2, Archive,
 } from "lucide-react";
 import SortableTable from "@/app/components/SortableTable";
+
+const LINE_EXPORT_SELECT = `
+  number, customer_date_real, total_price, serial_number, has_sim, note, report_note,
+  calls_package_price, internet_package_price, line_extension_price,
+  clients(name, national_id, address),
+  providers(name),
+  accounts(account_no, account_name),
+  almanafiz(name),
+  agents(name),
+  departments(name),
+  groups(name),
+  line_statuses(name),
+  calls_packages(package_name),
+  internet_packages(package_name),
+  line_extensions(extension_name)
+`;
+
+function lineToExcelRow(line: any) {
+  return {
+    رقم_الخط: line.number,
+    العميل: line.clients?.name,
+    الرقم_القومي: line.clients?.national_id,
+    العنوان: line.clients?.address,
+    تاريخ_العميل: line.customer_date_real,
+    الشبكة: line.providers?.name,
+    الأكونت: line.accounts?.account_no,
+    اسم_الأكونت: line.accounts?.account_name,
+    المنفذ: line.almanafiz?.name,
+    المندوب: line.agents?.name,
+    القسم: line.departments?.name,
+    الجروب: line.groups?.name,
+    حالة_الخط: line.line_statuses?.name,
+    باقة_المكالمات: line.calls_packages?.package_name,
+    سعر_المكالمات: line.calls_package_price,
+    باقة_الإنترنت: line.internet_packages?.package_name,
+    سعر_الإنترنت: line.internet_package_price,
+    الإضافة: line.line_extensions?.extension_name,
+    سعر_الإضافة: line.line_extension_price,
+    إجمالي_السعر: line.total_price,
+    سيريال_نمبر: line.serial_number,
+    على_شريحة: line.has_sim ? "نعم" : "لا",
+    ملاحظات: line.note,
+    ملاحظات_التقرير: line.report_note,
+  };
+}
 
 export default function LinesPage() {
   const router = useRouter();
@@ -22,6 +67,9 @@ export default function LinesPage() {
   const [exportLoading, setExportLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [progressPercent, setProgressPercent] = useState(0);
+  const [custodyLoading, setCustodyLoading] = useState(false);
+  const [custodyProgressText, setCustodyProgressText] = useState("");
+  const [custodyProgressPercent, setCustodyProgressPercent] = useState(0);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [filterProvider, setFilterProvider] = useState("");
@@ -233,7 +281,7 @@ if (search.trim()) {
         for (let j = i; j < Math.min(i + concurrency, totalBatches); j++) {
   let q = supabase
     .from("lines")
-    .select(`...`)
+    .select(LINE_EXPORT_SELECT)
     .not("is_deleted", "eq", true)
     .order("id", { ascending: false })
     .range(j * batchSize, (j + 1) * batchSize - 1);
@@ -262,34 +310,7 @@ if (search.trim()) {
 
         for (const { data, error } of results) {
           if (error) throw new Error(error.message);
-          // flatten الـ joins
-          const flat = (data || []).map((line: any) => ({
-            رقم_الخط: line.number,
-            العميل: line.clients?.name,
-            الرقم_القومي: line.clients?.national_id,
-            العنوان: line.clients?.address,
-            تاريخ_العميل: line.customer_date_real,
-            الشبكة: line.providers?.name,
-            الأكونت: line.accounts?.account_no,
-            اسم_الأكونت: line.accounts?.account_name,
-            المنفذ: line.almanafiz?.name,
-            المندوب: line.agents?.name,
-            القسم: line.departments?.name,
-            الجروب: line.groups?.name,
-            حالة_الخط: line.line_statuses?.name,
-            باقة_المكالمات: line.calls_packages?.package_name,
-            سعر_المكالمات: line.calls_package_price,
-            باقة_الإنترنت: line.internet_packages?.package_name,
-            سعر_الإنترنت: line.internet_package_price,
-            الإضافة: line.line_extensions?.extension_name,
-            سعر_الإضافة: line.line_extension_price,
-            إجمالي_السعر: line.total_price,
-            سيريال_نمبر: line.serial_number,
-            على_شريحة: line.has_sim ? "نعم" : "لا",
-            ملاحظات: line.note,
-            ملاحظات_التقرير: line.report_note,
-          }));
-          allData = [...allData, ...flat];
+          allData = [...allData, ...(data || []).map(lineToExcelRow)];
         }
 
         setProgressPercent(Math.round((allData.length / total) * 100));
@@ -308,6 +329,100 @@ if (search.trim()) {
       setExportLoading(false);
       setProgressPercent(0);
       setProgressText("");
+    }
+  }
+
+  // ─── Export العهدة الحالية (الخطوط الغير مباعة/الملغاة) ────
+  async function exportUnsoldToExcel() {
+    setCustodyLoading(true);
+    setCustodyProgressPercent(0);
+    setCustodyProgressText("");
+
+    try {
+      let countQuery = supabase
+        .from("lines")
+        .select("*", { count: "exact", head: true })
+        .or("is_deleted.is.null,is_deleted.eq.false")
+        .eq("is_deactive", true);
+
+      if (search.trim()) {
+        const { data: matchedClients } = await supabase
+          .from("clients")
+          .select("id")
+          .ilike("name", `%${search}%`);
+        const clientIds = (matchedClients || []).map((c) => c.id);
+        if (clientIds.length > 0) {
+          countQuery = countQuery.or(`number.ilike.%${search}%,client_id.in.(${clientIds.join(",")})`);
+        } else {
+          countQuery = countQuery.ilike("number", `%${search}%`);
+        }
+      }
+      if (filterProvider) countQuery = countQuery.eq("provider_id", Number(filterProvider));
+      if (filterAlmanafiz) countQuery = countQuery.eq("almanafiz_id", Number(filterAlmanafiz));
+
+      const { count } = await countQuery;
+      const total = count || 0;
+      const batchSize = 1000;
+      const totalBatches = Math.ceil(total / batchSize);
+
+      setCustodyProgressText(`جارٍ تحميل ${total.toLocaleString()} سجل...`);
+
+      let allData: any[] = [];
+      const concurrency = 10;
+
+      for (let i = 0; i < totalBatches; i += concurrency) {
+        const batchPromises = [];
+
+        for (let j = i; j < Math.min(i + concurrency, totalBatches); j++) {
+          let q = supabase
+            .from("lines")
+            .select(LINE_EXPORT_SELECT)
+            .or("is_deleted.is.null,is_deleted.eq.false")
+            .eq("is_deactive", true)
+            .order("id", { ascending: false })
+            .range(j * batchSize, (j + 1) * batchSize - 1);
+
+          if (search.trim()) {
+            const { data: matchedClients } = await supabase
+              .from("clients")
+              .select("id")
+              .ilike("name", `%${search}%`);
+            const clientIds = (matchedClients || []).map((c) => c.id);
+            if (clientIds.length > 0) {
+              q = q.or(`number.ilike.%${search}%,client_id.in.(${clientIds.join(",")})`);
+            } else {
+              q = q.ilike("number", `%${search}%`);
+            }
+          }
+          if (filterProvider) q = q.eq("provider_id", Number(filterProvider));
+          if (filterAlmanafiz) q = q.eq("almanafiz_id", Number(filterAlmanafiz));
+
+          batchPromises.push(q);
+        }
+
+        const results = await Promise.all(batchPromises);
+
+        for (const { data, error } of results) {
+          if (error) throw new Error(error.message);
+          allData = [...allData, ...(data || []).map(lineToExcelRow)];
+        }
+
+        setCustodyProgressPercent(total > 0 ? Math.round((allData.length / total) * 100) : 100);
+        setCustodyProgressText(`تم تحميل ${allData.length.toLocaleString()} من ${total.toLocaleString()} سجل...`);
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(allData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "العهدة الحالية");
+      XLSX.writeFile(workbook, `العهدة-الحالية-${allData.length}.xlsx`);
+
+    } catch (err) {
+      console.error(err);
+      alert(`خطأ: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCustodyLoading(false);
+      setCustodyProgressPercent(0);
+      setCustodyProgressText("");
     }
   }
 
@@ -395,6 +510,26 @@ if (search.trim()) {
               <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
                   style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <button onClick={exportUnsoldToExcel} disabled={custodyLoading}
+            className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition text-slate-700 px-5 py-2.5 rounded-xl shadow-sm font-medium text-sm">
+            {custodyLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Archive className="w-4 h-4" />}
+            العهدة الحالية
+          </button>
+          {custodyLoading && custodyProgressText && (
+            <div className="w-64">
+              <div className="flex justify-between text-xs text-slate-500 mb-1">
+                <span>{custodyProgressText}</span>
+                <span>{custodyProgressPercent}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                  style={{ width: `${custodyProgressPercent}%` }} />
               </div>
             </div>
           )}

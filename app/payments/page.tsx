@@ -4,15 +4,39 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import Papa from "papaparse";
 import {
-  CreditCard, Upload, Download, Search, Calendar,
-  Loader2, Check, X, FileSpreadsheet, ChevronLeft, ChevronRight,
+  CreditCard, Download, Search, Loader2, Check, X,
+  ChevronLeft, ChevronRight, Cloud, UserCheck, UserX, Percent, Network,
 } from "lucide-react";
 
 const PAGE_SIZE = 50;
 
 // الأقسام المستبعدة لما "كل الأقسام" مختارة
-const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "", "هيثم"];
+const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
+
+// رابط Google Sheet المنشور كـ CSV
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS9OSpK1_ukTAgEP8emp5epTtdcCA1-a4iDSQ375wo6n_4sNaXVNwfwM-tfdrddrpU0P4TTElhCDHGG/pub?gid=1700747738&single=true&output=csv";
+
+function StatCard({ label, value, suffix, icon: Icon, iconBg, iconColor, valueColor }: {
+  label: string; value: string | number; suffix?: string;
+  icon: React.ElementType; iconBg: string; iconColor: string; valueColor: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="flex items-start justify-between">
+        <p className="text-slate-500 text-sm">{label}</p>
+        <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${iconBg}`}>
+          <Icon className={`w-5 h-5 ${iconColor}`} />
+        </span>
+      </div>
+      <p className={`text-2xl font-bold mt-3 ${valueColor}`}>
+        {value}
+        {suffix && <span className="text-sm font-normal text-slate-400 mr-1">{suffix}</span>}
+      </p>
+    </div>
+  );
+}
 
 export default function PaymentsPage() {
   const router = useRouter();
@@ -26,30 +50,34 @@ export default function PaymentsPage() {
 
   // Filters
   const [search, setSearch] = useState("");
-  const [filterMonth, setFilterMonth] = useState("");
   const [filterCode, setFilterCode] = useState("");
   const [filterDepartment, setFilterDepartment] = useState("");
+  const [filterProvider, setFilterProvider] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
   const [departmentsList, setDepartmentsList] = useState<any[]>([]);
+  const [providersList, setProvidersList] = useState<any[]>([]);
+
+  // نطاق الأرقام المسموح بيها حسب فلتر القسم/الشبكة (لتفليتر الجدول)
+  const [scopedNumbers, setScopedNumbers] = useState<string[] | null>(null); // null = بدون فلتر (كل الأرقام)
 
   // Stats
+  const [statsLoading, setStatsLoading] = useState(false);
   const [stats, setStats] = useState({
-    totalCount: 0,
-    totalAmount: 0,
-    monthCount: 0,
-    monthCollected: 0,
-    monthRequired: 0,
-    monthUnpaid: 0,
+    totalRequired: 0,
+    totalCollected: 0,
+    totalUnpaidAmount: 0,
     collectionRate: 0,
+    paidLinesCount: 0,
+    unpaidLinesCount: 0,
   });
+  const [unpaidList, setUnpaidList] = useState<{ number: string; total_price: number }[]>([]);
+  const [exportingUnpaid, setExportingUnpaid] = useState(false);
 
-  // Import
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importMonth, setImportMonth] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState(0);
-  const [importText, setImportText] = useState("");
-  const [importResult, setImportResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
+  // Import (Google Sheet)
+  const [sheetImporting, setSheetImporting] = useState(false);
+  const [sheetProgress, setSheetProgress] = useState(0);
+  const [sheetText, setSheetText] = useState("");
+  const [sheetResult, setSheetResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
 
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin";
@@ -65,11 +93,21 @@ export default function PaymentsPage() {
   useEffect(() => {
     supabase.from("departments").select("id, name").order("name")
       .then(({ data }) => setDepartmentsList(data || []));
+    supabase.from("providers").select("id, name").order("name")
+      .then(({ data }) => setProvidersList(data || []));
   }, []);
 
-  // ─── Load payments ────────────────────────────────────────
-  async function loadPayments() {
+  // ─── Load payments (الجدول) — بيراعي فلتر القسم/الشبكة ────
+  async function loadPayments(numbersScope: string[] | null) {
     setLoading(true);
+
+    // لو في فلتر قسم/شبكة ومفيش أي أرقام تطابقه، رجّعي نتيجة فاضية على طول
+    if (numbersScope !== null && numbersScope.length === 0) {
+      setPayments([]);
+      setTotal(0);
+      setLoading(false);
+      return;
+    }
 
     let query = supabase
       .from("payments")
@@ -79,10 +117,10 @@ export default function PaymentsPage() {
 
     if (search.trim())
       query = query.or(`line_number.ilike.%${search}%,billing_account_number.ilike.%${search}%`);
-    if (filterMonth)
-      query = query.eq("payment_month", filterMonth);
     if (filterCode)
       query = query.eq("payment_code", filterCode);
+    if (numbersScope !== null)
+      query = query.in("line_number", numbersScope);
 
     const { data, count } = await query;
     setPayments(data || []);
@@ -90,146 +128,207 @@ export default function PaymentsPage() {
     setLoading(false);
   }
 
-  function parseExcelDate(value: any): string | null {
+  // ─── Parser ذكي لتواريخ الشيت (صيغ مختلطة) ────────────────
+  const MONTH_NAMES: Record<string, string> = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+
+  function parseSheetDate(value: any): string | null {
     if (!value) return null;
-    const str = String(value).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
-      const parts = str.split("/");
-      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    let str = String(value).trim();
+    if (!str) return null;
+
+    let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) {
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (month > 12 && day <= 12) {
+        return `${m[1]}-${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}`;
+      }
+      return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
     }
-    const num = Number(value);
-    if (!isNaN(num) && num > 1000) {
-      const date = new Date((num - 25569) * 86400 * 1000);
-      const year = date.getUTCFullYear();
-      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-      const day = String(date.getUTCDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
+
+    m = str.match(/^(\d{1,2})[-\/]([A-Za-z]{3})[-\/](\d{4})/);
+    if (m) {
+      const mon = MONTH_NAMES[m[2].toLowerCase()];
+      if (mon) return `${m[3]}-${mon}-${m[1].padStart(2, "0")}`;
     }
+
+    m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      const year = m[3];
+
+      let day: number, month: number;
+      if (a > 12 && b <= 12) {
+        day = a; month = b;
+      } else if (b > 12 && a <= 12) {
+        day = b; month = a;
+      } else {
+        day = a; month = b;
+      }
+
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+
     return null;
   }
 
-  // ─── Load stats ───────────────────────────────────────────
-  async function loadStats() {
-    // إجمالي الكل (كل الوقت)
-    const { count: totalCount } = await supabase
-      .from("payments").select("*", { count: "exact", head: true });
+  function getMonthFromDate(dateStr: string | null): string | null {
+    if (!dateStr) return null;
+    const m = dateStr.match(/^(\d{4})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}` : null;
+  }
 
-    let totalAmount = 0;
-    let offset = 0;
+  // ─── جيبي أرقام الخطوط اللي جوا نطاق القسم/الشبكة ─────────
+  async function loadScopedLines(): Promise<{ number: string; total_price: number }[]> {
+    let lineQuery = supabase
+      .from("lines")
+      .select("number, total_price, departments(name)")
+      .or("is_deleted.is.null,is_deleted.eq.false")
+      .not("department_id", "is", null);
+
+    if (filterDepartment) lineQuery = lineQuery.eq("department_id", Number(filterDepartment));
+    if (filterProvider) lineQuery = lineQuery.eq("provider_id", Number(filterProvider));
+
+    let result: { number: string; total_price: number }[] = [];
+    let lOffset = 0;
     while (true) {
-      const { data } = await supabase.from("payments")
-        .select("amount").range(offset, offset + 999);
+      const { data } = await lineQuery.range(lOffset, lOffset + 999);
       if (!data || data.length === 0) break;
-      totalAmount += data.reduce((s, p) => s + (p.amount || 0), 0);
+
+      const filtered = filterDepartment
+        ? data
+        : data.filter((l: any) => !EXCLUDED_DEPARTMENTS.includes(l.departments?.name || ""));
+
+      result.push(...filtered.map((l: any) => ({ number: l.number, total_price: l.total_price || 0 })));
       if (data.length < 1000) break;
-      offset += 1000;
+      lOffset += 1000;
+    }
+    return result;
+  }
+
+  // ─── Load stats + نطاق الأرقام (تلقائي حسب فلتر القسم/الشبكة) ───
+  async function loadStatsAndScope() {
+    setStatsLoading(true);
+
+    const hasFilter = Boolean(filterDepartment || filterProvider);
+    const departmentLines = await loadScopedLines();
+    const lineNumberSet = new Set(departmentLines.map((l) => l.number));
+    const totalRequired = departmentLines.reduce((s, l) => s + l.total_price, 0);
+
+    const paidAmountByLine = new Map<string, number>();
+    let pOffset = 0;
+    while (true) {
+      const { data } = await supabase.from("payments").select("line_number, amount")
+        .range(pOffset, pOffset + 999);
+      if (!data || data.length === 0) break;
+      data.forEach((p: any) => {
+        if (!lineNumberSet.has(p.line_number)) return;
+        paidAmountByLine.set(p.line_number, (paidAmountByLine.get(p.line_number) || 0) + (p.amount || 0));
+      });
+      if (data.length < 1000) break;
+      pOffset += 1000;
     }
 
-    // ─── إحصائيات الشهر المفلتر ─────────────────────────
-    let monthCollected = 0;   // المحصل فعلاً
-    let monthRequired = 0;    // المطلوب (من الخطوط)
-    let monthCount = 0;       // عدد السدادات
+    const totalCollected = [...paidAmountByLine.values()].reduce((s, a) => s + a, 0);
+    const paidLinesCount = paidAmountByLine.size;
+    const unpaid = departmentLines.filter((l) => !paidAmountByLine.has(l.number));
+    const unpaidLinesCount = unpaid.length;
+    const totalUnpaidAmount = Math.max(totalRequired - totalCollected, 0);
+    const collectionRate = totalRequired > 0 ? (totalCollected / totalRequired) * 100 : 0;
 
-    if (filterMonth) {
-      // 1. المحصل — من جدول payments
-      const { count } = await supabase
-        .from("payments").select("*", { count: "exact", head: true })
-        .eq("payment_month", filterMonth);
-      monthCount = count || 0;
+    setUnpaidList(unpaid);
+    setStats({
+      totalRequired,
+      totalCollected,
+      totalUnpaidAmount,
+      collectionRate,
+      paidLinesCount,
+      unpaidLinesCount,
+    });
 
-      let mOffset = 0;
-      while (true) {
-        const { data } = await supabase.from("payments")
-          .select("amount").eq("payment_month", filterMonth)
-          .range(mOffset, mOffset + 999);
-        if (!data || data.length === 0) break;
-        monthCollected += data.reduce((s, p) => s + (p.amount || 0), 0);
-        if (data.length < 1000) break;
-        mOffset += 1000;
-      }
-
-      // 2. المطلوب — إجمالي total_price حسب فلتر القسم
-      let lineQuery = supabase
-        .from("lines")
-        .select("total_price, departments(name)")
-        .or("is_deleted.is.null,is_deleted.eq.false")
-        .not("department_id", "is", null);
-
-      if (filterDepartment) {
-        lineQuery = lineQuery.eq("department_id", Number(filterDepartment));
-      }
-
-      let lOffset = 0;
-      while (true) {
-        const { data } = await lineQuery.range(lOffset, lOffset + 999);
-        if (!data || data.length === 0) break;
-
-        const filtered = filterDepartment
-          ? data // لو مختار قسم معين، خديه زي ما هو
-          : data.filter((l: any) => !EXCLUDED_DEPARTMENTS.includes(l.departments?.name || ""));
-
-        monthRequired += filtered.reduce((s: number, l: any) => s + (l.total_price || 0), 0);
-        if (data.length < 1000) break;
-        lOffset += 1000;
-      }
-    }
-
-    // الأكواد
     const { data: codesData } = await supabase
       .from("payments").select("payment_code").limit(10000);
     setCodes([...new Set((codesData || []).map((p) => p.payment_code).filter(Boolean))]);
 
-    const monthUnpaid = monthRequired - monthCollected;
-    const collectionRate = monthRequired > 0 ? (monthCollected / monthRequired) * 100 : 0;
-
-    setStats({
-      totalCount: totalCount || 0,
-      totalAmount,
-      monthCount,
-      monthCollected,
-      monthRequired,
-      monthUnpaid: monthUnpaid > 0 ? monthUnpaid : 0,
-      collectionRate,
-    });
+    const numbersScope = hasFilter ? [...lineNumberSet] : null;
+    setScopedNumbers(numbersScope);
+    setStatsLoading(false);
+    return numbersScope;
   }
 
-  useEffect(() => { loadPayments(); loadStats(); }, []);
+  // أول تحميل
   useEffect(() => {
-    const t = setTimeout(() => { loadPayments(); loadStats(); }, 300);
+    (async () => {
+      const scope = await loadStatsAndScope();
+      loadPayments(scope);
+    })();
+  }, []);
+
+  // تغيير القسم أو الشبكة → إعادة حساب النطاق والإحصائيات وتحديث الجدول
+  useEffect(() => {
+    (async () => {
+      setPage(1);
+      const scope = await loadStatsAndScope();
+      loadPayments(scope);
+    })();
+  }, [filterDepartment, filterProvider]);
+
+  // تغيير البحث/الكود/الصفحة → إعادة تحميل الجدول بس بنفس النطاق الحالي
+  useEffect(() => {
+    const t = setTimeout(() => loadPayments(scopedNumbers), 300);
     return () => clearTimeout(t);
-  }, [search, filterMonth, filterCode, filterDepartment, page]);
+  }, [search, filterCode, page]);
 
-  // ─── Import ───────────────────────────────────────────────
-  async function importFromExcel() {
-    if (!importFile) { alert("اختاري ملف Excel أولاً"); return; }
-    if (!importMonth) { alert("اختاري شهر السداد أولاً"); return; }
-
-    setImporting(true);
-    setImportProgress(0);
-    setImportText("جارٍ قراءة الملف...");
-    setImportResult(null);
+  // ─── Import من Google Sheet (upsert لمنع التكرار) ─────────
+  async function importFromGoogleSheet() {
+    setSheetImporting(true);
+    setSheetProgress(0);
+    setSheetText("جارٍ تحميل الشيت...");
+    setSheetResult(null);
 
     try {
-      const buffer = await importFile.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[];
+      const res = await fetch(SHEET_CSV_URL);
+      if (!res.ok) throw new Error("فشل تحميل الشيت — تأكدي إنه لسه Published");
+      const csvText = await res.text();
 
-      const records = rows
-        .filter((r) => String(r["number"] || "").trim())
-        .map((r) => ({
-          line_number: String(r["number"] || "").trim(),
-          amount: Number(r["amount"] || 0),
-          payment_code: String(r["payment_code"] || r["code"] || "").trim() || null,
-          trans_date: parseExcelDate(r["trans_date"]),
-          payment_month: importMonth,
-        }));
+      setSheetText("جارٍ تحليل البيانات...");
+      const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+      const rows = parsed.data as any[];
 
-      if (records.length === 0) throw new Error("مفيش سجلات صالحة في الملف");
+      const records: any[] = [];
 
-      // ─── جيبي account_no من lines ─────────────────────────
-      setImportText("جارٍ جلب أرقام الحسابات...");
+      rows.forEach((r) => {
+        const number = String(r["الرقم"] || "").trim();
+        if (!number) return;
+
+        const rawDate = String(r["تاريخ السداد"] || "").trim();
+        const dateStr = parseSheetDate(rawDate);
+        if (!dateStr) return;
+
+        const month = getMonthFromDate(dateStr);
+        const sheetKey = `${number}|${rawDate}`;
+
+        records.push({
+          line_number: number,
+          amount: Number(r["المبلغ"] || 0),
+          // طريقة السداد الصح بتيجي من عمود "طريقه السداد" مش "manfaz"
+          payment_code: String(r["طريقه السداد"] || "").trim() || null,
+          trans_date: dateStr,
+          payment_month: month,
+          note: String(r["نوت"] || "").trim() || null,
+          remaining: r["المتبقى"] !== undefined && r["المتبقى"] !== "" ? Number(r["المتبقى"]) : null,
+          sheet_key: sheetKey,
+        });
+      });
+
+      if (records.length === 0) throw new Error("مفيش سجلات صالحة في الشيت");
+
+      setSheetText("جارٍ جلب أرقام الحسابات...");
       const allNumbers = [...new Set(records.map((r) => r.line_number))];
       const accountMap = new Map<string, string>();
 
@@ -249,40 +348,62 @@ export default function PaymentsPage() {
         billing_account_number: accountMap.get(r.line_number) || null,
       }));
 
-      // ─── ارفعي ────────────────────────────────────────────
-      setImportText(`جارٍ رفع ${finalRecords.length} سداد...`);
+      const uniqueMap = new Map<string, any>();
+      finalRecords.forEach((r) => uniqueMap.set(r.sheet_key, r));
+      const uniqueRecords = [...uniqueMap.values()];
+
+      setSheetText(`جارٍ رفع ${uniqueRecords.length} سداد...`);
       let uploaded = 0;
-      for (let i = 0; i < finalRecords.length; i += 500) {
-        const batch = finalRecords.slice(i, i + 500);
-        const { error } = await supabase.from("payments").insert(batch);
+      for (let i = 0; i < uniqueRecords.length; i += 500) {
+        const batch = uniqueRecords.slice(i, i + 500);
+        const { error } = await supabase
+          .from("payments")
+          .upsert(batch, { onConflict: "sheet_key" });
         if (error) throw new Error(error.message);
-        uploaded = Math.min(i + 500, finalRecords.length);
-        setImportProgress(Math.round((uploaded / finalRecords.length) * 100));
-        setImportText(`تم رفع ${uploaded} من ${finalRecords.length}...`);
+        uploaded = Math.min(i + 500, uniqueRecords.length);
+        setSheetProgress(Math.round((uploaded / uniqueRecords.length) * 100));
+        setSheetText(`تم رفع ${uploaded} من ${uniqueRecords.length}...`);
       }
 
-      setImportResult({
+      setSheetResult({
         status: "success",
-        message: `تم رفع ${finalRecords.length} سداد لشهر ${importMonth} بنجاح`,
+        message: `تم رفع/تحديث ${uniqueRecords.length} سداد من الشيت بنجاح`,
       });
-      loadPayments();
-      loadStats();
+      const scope = await loadStatsAndScope();
+      loadPayments(scope);
     } catch (err) {
-      setImportResult({
+      setSheetResult({
         status: "error",
         message: err instanceof Error ? err.message : "خطأ غير متوقع",
       });
     } finally {
-      setImporting(false);
-      setImportFile(null);
+      setSheetImporting(false);
     }
   }
 
-  // ─── Export ───────────────────────────────────────────────
+  // ─── تصدير الغير مسددين ───────────────────────────────────
+  function exportUnpaid() {
+    if (unpaidList.length === 0) { alert("لا توجد أرقام غير مسددة حسب الفلتر الحالي"); return; }
+    setExportingUnpaid(true);
+    try {
+      const rows = unpaidList.map((l) => ({
+        "رقم الخط": l.number,
+        "المبلغ المطلوب": l.total_price,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "غير مسدد");
+      XLSX.writeFile(wb, `unpaid.xlsx`);
+    } finally {
+      setExportingUnpaid(false);
+    }
+  }
+
+  // ─── Export الجدول ────────────────────────────────────────
   async function exportToExcel() {
     let query = supabase.from("payments").select("*").order("id", { ascending: false });
-    if (filterMonth) query = query.eq("payment_month", filterMonth);
     if (filterCode) query = query.eq("payment_code", filterCode);
+    if (scopedNumbers !== null) query = query.in("line_number", scopedNumbers);
 
     const { data } = await query.limit(100000);
     if (!data) return;
@@ -294,12 +415,14 @@ export default function PaymentsPage() {
       "طريقة السداد": p.payment_code,
       "شهر السداد": p.payment_month,
       "تاريخ العملية": p.trans_date,
+      "النوت": p.note,
+      "المتبقي": p.remaining,
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "المدفوعات");
-    XLSX.writeFile(wb, `payments-${filterMonth || "all"}.xlsx`);
+    XLSX.writeFile(wb, `payments-all.xlsx`);
   }
 
   if (!authorized) return null;
@@ -320,127 +443,117 @@ export default function PaymentsPage() {
           </div>
         </div>
 
-        {/* Department filter for stats */}
+        {/* Department + Provider filter */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-4">
-          <label className="block text-xs text-slate-500 mb-1.5">فلتر القسم (لحساب الإحصائيات)</label>
-          <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
-            className="w-full md:w-72 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
-            <option value="">كل الأقسام (بدون SPOC، فوري، العهدة، هيثم)</option>
-            {departmentsList.map((d) => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">فلتر القسم</label>
+              <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
+                <option value="">كل الأقسام (بدون SPOC، فوري، العهدة، هيثم)</option>
+                {departmentsList.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+                <Network className="w-3.5 h-3.5" /> فلتر الشبكة
+              </label>
+              <select value={filterProvider} onChange={(e) => setFilterProvider(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
+                <option value="">كل الشبكات</option>
+                {providersList.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">إجمالي المطلوب (الشهر)</p>
-            <p className="text-2xl font-bold text-purple-600 mt-1">
-              {filterMonth ? stats.monthRequired.toLocaleString() : "—"}
-            </p>
-            <p className="text-xs text-slate-400">جنيه</p>
+        {statsLoading ? (
+          <div className="flex items-center justify-center gap-2 bg-white rounded-2xl border border-slate-100 py-10 text-slate-400 mb-6">
+            <Loader2 className="w-5 h-5 animate-spin" /> جارٍ حساب الإحصائيات...
           </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">إجمالي المحصل (الشهر)</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">
-              {filterMonth ? stats.monthCollected.toLocaleString() : "—"}
-            </p>
-            <p className="text-xs text-slate-400">جنيه</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">إجمالي الغير مسدد</p>
-            <p className="text-2xl font-bold text-red-500 mt-1">
-              {filterMonth ? stats.monthUnpaid.toLocaleString() : "—"}
-            </p>
-            <p className="text-xs text-slate-400">جنيه</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <p className="text-xs text-slate-500">نسبة التحصيل</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">
-              {filterMonth ? `${stats.collectionRate.toFixed(1)}%` : "—"}
-            </p>
-            <p className="text-xs text-slate-400">{stats.monthCount} سداد</p>
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+              <StatCard label="إجمالي المطلوب" value={stats.totalRequired.toLocaleString()} suffix="جنيه"
+                icon={CreditCard} iconBg="bg-purple-50" iconColor="text-purple-600" valueColor="text-purple-600" />
+              <StatCard label="إجمالي المحصل" value={stats.totalCollected.toLocaleString()} suffix="جنيه"
+                icon={Check} iconBg="bg-green-50" iconColor="text-green-600" valueColor="text-green-600" />
+              <StatCard label="إجمالي الغير مسدد" value={stats.totalUnpaidAmount.toLocaleString()} suffix="جنيه"
+                icon={X} iconBg="bg-red-50" iconColor="text-red-500" valueColor="text-red-500" />
+              <StatCard label="نسبة التحصيل" value={`${stats.collectionRate.toFixed(1)}%`}
+                icon={Percent} iconBg="bg-blue-50" iconColor="text-blue-600" valueColor="text-blue-600" />
+              <StatCard label="عدد المسددين" value={stats.paidLinesCount} suffix="خط"
+                icon={UserCheck} iconBg="bg-teal-50" iconColor="text-teal-600" valueColor="text-teal-600" />
+              <StatCard label="عدد الغير مسددين" value={stats.unpaidLinesCount} suffix="خط"
+                icon={UserX} iconBg="bg-orange-50" iconColor="text-orange-600" valueColor="text-orange-600" />
+            </div>
 
-        {/* Import */}
+            <div className="flex justify-end mb-6">
+              <button onClick={exportUnpaid} disabled={exportingUnpaid || stats.unpaidLinesCount === 0}
+                className="flex items-center gap-2 bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 px-5 py-2.5 rounded-xl font-medium text-sm transition border border-red-100">
+                {exportingUnpaid ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                تحميل قائمة الغير مسددين ({stats.unpaidLinesCount})
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Import من Google Sheet */}
         {canEdit && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-5">
             <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-              <FileSpreadsheet className="w-4 h-4 text-green-600" />
-              رفع سدادات شهرية
+              <Cloud className="w-4 h-4 text-blue-600" />
+              استيراد من Google Sheet
             </p>
-            <div className="grid md:grid-cols-3 gap-3">
-              {/* الشهر */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1.5">سداد شهر *</label>
-                <input type="month" value={importMonth}
-                  onChange={(e) => setImportMonth(e.target.value)}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200" />
-              </div>
-              {/* الملف */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1.5">ملف Excel *</label>
-                <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-3 py-2.5 cursor-pointer transition text-sm ${
-                  importFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-green-300 text-slate-400"
-                }`}>
-                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{importFile ? importFile.name : "اختر ملف .xlsx"}</span>
-                  <input type="file" accept=".xlsx,.xls" className="hidden"
-                    onChange={(e) => { setImportFile(e.target.files?.[0] ?? null); setImportResult(null); }} />
-                </label>
-              </div>
-              {/* زرار */}
-              <div className="flex items-end">
-                <button onClick={importFromExcel} disabled={importing || !importFile || !importMonth}
-                  className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
-                  {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  رفع السدادات
-                </button>
-              </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button onClick={importFromGoogleSheet} disabled={sheetImporting}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
+                {sheetImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+                استيراد / تحديث كل السدادات من الشيت
+              </button>
+              <p className="text-xs text-slate-400">
+                آمن للتكرار — ينفع تدوسيه كل يوم، وهيحدث الموجود بدل ما يكرره
+              </p>
             </div>
 
-            {importing && (
+            {sheetImporting && (
               <div className="mt-3">
                 <div className="flex justify-between text-xs text-slate-500 mb-1">
-                  <span>{importText}</span>
-                  <span>{importProgress}%</span>
+                  <span>{sheetText}</span>
+                  <span>{sheetProgress}%</span>
                 </div>
                 <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-green-500 rounded-full transition-all"
-                    style={{ width: `${importProgress}%` }} />
+                  <div className="h-full bg-blue-500 rounded-full transition-all"
+                    style={{ width: `${sheetProgress}%` }} />
                 </div>
               </div>
             )}
 
-            {importResult && (
+            {sheetResult && (
               <div className={`mt-3 flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${
-                importResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+                sheetResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
               }`}>
-                {importResult.status === "success" ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
-                {importResult.message}
+                {sheetResult.status === "success" ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                {sheetResult.message}
               </div>
             )}
-
-            <p className="text-xs text-slate-400 mt-2">
-              الأعمدة: <span className="font-mono">number</span> (رقم الخط) + <span className="font-mono">amount</span> + <span className="font-mono">payment_code</span> (اختياري) + <span className="font-mono">trans_date</span> (اختياري) — رقم الحساب بيتجاب أوتوماتيك
-            </p>
           </div>
         )}
 
-        {/* Filters */}
+        {/* Filters (جدول السدادات) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-4">
-          <div className="grid md:grid-cols-4 gap-3">
+          <div className="grid md:grid-cols-3 gap-3">
             <div className="relative md:col-span-2">
               <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 placeholder="بحث برقم الخط أو رقم الحساب"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-200" />
             </div>
-            <input type="month" value={filterMonth}
-              onChange={(e) => { setFilterMonth(e.target.value); setPage(1); }}
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200" />
             <div className="flex gap-2">
               <select value={filterCode} onChange={(e) => { setFilterCode(e.target.value); setPage(1); }}
                 className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
@@ -473,6 +586,8 @@ export default function PaymentsPage() {
                   <th className="p-3 text-right font-medium">طريقة السداد</th>
                   <th className="p-3 text-right font-medium">شهر السداد</th>
                   <th className="p-3 text-right font-medium">تاريخ العملية</th>
+                  <th className="p-3 text-right font-medium">المتبقي</th>
+                  <th className="p-3 text-right font-medium">النوت</th>
                 </tr>
               </thead>
               <tbody className="text-slate-700">
@@ -492,11 +607,21 @@ export default function PaymentsPage() {
                       </span>
                     </td>
                     <td className="p-3 text-slate-400 text-xs">{payment.trans_date || "—"}</td>
+                    <td className="p-3 text-xs">
+                      {payment.remaining != null ? (
+                        <span className={payment.remaining < 0 ? "text-red-500 font-medium" : "text-slate-600"}>
+                          {payment.remaining.toLocaleString()}
+                        </span>
+                      ) : "—"}
+                    </td>
+                    <td className="p-3 text-xs text-slate-400 max-w-[160px] truncate" title={payment.note || ""}>
+                      {payment.note || "—"}
+                    </td>
                   </tr>
                 ))}
                 {payments.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-10 text-center text-slate-400">لا توجد سدادات</td>
+                    <td colSpan={8} className="p-10 text-center text-slate-400">لا توجد سدادات</td>
                   </tr>
                 )}
               </tbody>

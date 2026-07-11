@@ -164,10 +164,9 @@ const migration = result.filter((x: any) => x.department_id === MIGRATION_DEPT_I
     if (filterAgent) totalInventoryQuery = totalInventoryQuery.eq("agent_id", Number(filterAgent));
     const { count: totalInventoryCount } = await totalInventoryQuery;
 
-    // الغير مباع الحالي — من غير فلتر تاريخ
-    let unsoldQuery = applyActiveFilter(
-      supabase.from("lines").select("*", { count: "exact", head: true })
-    ).is("department_id", null);
+    // الغير مباع الحالي — زي لوحة التحكم بالظبط (خطوط is_deactive = true)، من غير فلتر تاريخ
+    let unsoldQuery = supabase.from("lines").select("*", { count: "exact", head: true })
+      .eq("is_deactive", true);
     if (filterProvider) unsoldQuery = unsoldQuery.eq("provider_id", Number(filterProvider));
     if (filterAgent) unsoldQuery = unsoldQuery.eq("agent_id", Number(filterAgent));
     const { count: unsoldCount } = await unsoldQuery;

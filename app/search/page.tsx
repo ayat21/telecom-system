@@ -136,7 +136,7 @@ export default function SearchPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             rows={4}
-            placeholder={`ادخلي رقم أو أكتر بدون 0 — مفصولين بسطر جديد أو فاصلة:\n1012345678\n1098765432\n1156789012`}
+            placeholder={`ادخلي رقم أو أكتر  — مفصولين بسطر جديد أو فاصلة:\n01012345678\n01098765432\n01156789012`}
             className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 resize-none font-mono"
           />
           <div className="flex items-center justify-between mt-3">

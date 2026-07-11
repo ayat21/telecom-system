@@ -118,8 +118,7 @@ export default function DashboardPage() {
         .not("department_id", "is", null).neq("department_id", MIGRATION_DEPT_ID),
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
         .eq("department_id", MIGRATION_DEPT_ID),
-      baseFilterNoDate(supabase.from("lines").select("*", { count: "exact", head: true }))
-        .is("department_id", null),
+      supabase.from("lines").select("*", { count: "exact", head: true }).eq("is_deactive", true),
       supabase.from("clients").select("*", { count: "exact", head: true }),
       baseFilter(supabase.from("lines").select("*", { count: "exact", head: true }))
         .is("client_id", null).not("department_id", "is", null).neq("department_id", MIGRATION_DEPT_ID),
