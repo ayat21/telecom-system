@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
   FileText, Filter, Calendar, Network, Loader2,
-  Download, FileSpreadsheet, X, LayoutGrid,
+  Download, FileSpreadsheet, X, LayoutGrid, Upload, Check,
 } from "lucide-react";
 
 interface LineRow {
@@ -19,9 +19,21 @@ interface LineRow {
   almanafiz_name?: string;
 }
 
+const MONTH_NAMES_AR = [
+  "يناير", "فبراير", "مارس", "إبريل", "مايو", "يونيو",
+  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+];
+
+function getPrevMonth(monthStr: string): string {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m - 1 - 1, 1); // شهر قبل الحالي
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export default function KashfPage() {
   const router = useRouter();
   const [authorized, setAuthorized] = useState(false);
+  const [role, setRole] = useState("");
 
   const [almanafizList, setAlmanafizList] = useState<any[]>([]);
   const [almanafizSearch, setAlmanafizSearch] = useState("");
@@ -38,6 +50,7 @@ export default function KashfPage() {
   });
 
   const [lines, setLines] = useState<LineRow[]>([]);
+  const [balancesMap, setBalancesMap] = useState<Map<number, number>>(new Map());
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
@@ -45,12 +58,32 @@ export default function KashfPage() {
 
   const pdfCaptureRef = useRef<HTMLDivElement>(null);
 
+  // ─── رفع متبقي المنافذ ─────────────────────────────────────
+  const [balanceMonth, setBalanceMonth] = useState("");
+  const [balanceFile, setBalanceFile] = useState<File | null>(null);
+  const [uploadingBalances, setUploadingBalances] = useState(false);
+  const [balanceResult, setBalanceResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
+
   const isGroupMode = Boolean(filterGroup);
   const selectedAlmanafiz = almanafizList.find((a) => String(a.id) === filterAlmanafiz);
   const selectedGroup = groupsList.find((g) => String(g.id) === filterGroup);
 
+  const prevMonth = getPrevMonth(filterMonth);
+  const prevMonthLabel = (() => {
+    const [y, m] = prevMonth.split("-");
+    return `${MONTH_NAMES_AR[Number(m) - 1]} ${y}`;
+  })();
+
+  function getBalance(almanafizId?: number) {
+    if (!almanafizId) return 0;
+    return balancesMap.get(almanafizId) || 0;
+  }
+
   const totalLines = lines.length;
-  const totalAmount = lines.reduce((s, l) => s + (l.total_price || 0), 0);
+  const totalAmountRaw = lines.reduce((s, l) => s + (l.total_price || 0), 0);
+  const totalBalance = [...new Set(lines.map((l) => l.almanafiz_id).filter(Boolean))]
+    .reduce((s, id) => s + getBalance(id as number), 0);
+  const totalAmount = totalAmountRaw + totalBalance;
 
   const filteredAlmanafiz = almanafizSearch.trim()
     ? almanafizList.filter((a) => a.name.includes(almanafizSearch))
@@ -71,8 +104,9 @@ export default function KashfPage() {
   })();
 
   useEffect(() => {
-    const role = localStorage.getItem("role");
-    if (!role) { router.replace("/login"); return; }
+    const r = localStorage.getItem("role") || "";
+    setRole(r);
+    if (!r) { router.replace("/login"); return; }
     setAuthorized(true);
   }, []);
 
@@ -125,25 +159,95 @@ export default function KashfPage() {
     }
 
     const { data, error } = await query;
+
+    if (error) { setLoading(false); alert(error.message); return; }
+
+    const mappedLines = (data || []).map((l: any) => ({
+      id: l.id,
+      number: l.number,
+      client_name: l.clients?.name || "—",
+      report_note: l.report_note || "—",
+      total_price: l.total_price || 0,
+      almanafiz_id: l.almanafiz?.id,
+      almanafiz_name: l.almanafiz?.name || "—",
+    }));
+    setLines(mappedLines);
+
+    // ─── جيبي متبقي الشهر السابق للمنافذ دي ──────────────────
+    const outletIds = [...new Set(mappedLines.map((l) => l.almanafiz_id).filter(Boolean))] as number[];
+    if (outletIds.length > 0) {
+      const prev = getPrevMonth(filterMonth);
+      const { data: balData } = await supabase
+        .from("outlet_balances")
+        .select("almanafiz_id, remaining_amount")
+        .eq("month", prev)
+        .in("almanafiz_id", outletIds);
+      const map = new Map<number, number>();
+      (balData || []).forEach((b: any) => map.set(b.almanafiz_id, b.remaining_amount || 0));
+      setBalancesMap(map);
+    } else {
+      setBalancesMap(new Map());
+    }
+
     setLoading(false);
-
-    if (error) { alert(error.message); return; }
-
-    setLines(
-      (data || []).map((l: any) => ({
-        id: l.id,
-        number: l.number,
-        client_name: l.clients?.name || "—",
-        report_note: l.report_note || "—",
-        total_price: l.total_price || 0,
-        almanafiz_id: l.almanafiz?.id,
-        almanafiz_name: l.almanafiz?.name || "—",
-      }))
-    );
   }
 
-  function buildStatementHtml(title: string, rows: LineRow[], monthName: string, year: string) {
-    const total = rows.reduce((s, l) => s + (l.total_price || 0), 0);
+  // ─── رفع متبقي المنافذ من إكسيل ─────────────────────────────
+  async function uploadBalances() {
+    if (!balanceFile) { alert("اختاري ملف Excel أولاً"); return; }
+    if (!balanceMonth) { alert("اختاري الشهر اللي المتبقي ده بتاعه"); return; }
+
+    setUploadingBalances(true);
+    setBalanceResult(null);
+
+    try {
+      const buffer = await balanceFile.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[];
+
+      const nameToId = new Map<string, number>();
+      almanafizList.forEach((a) => nameToId.set(a.name.trim(), a.id));
+
+      const records: any[] = [];
+      const notFound: string[] = [];
+
+      rows.forEach((r) => {
+        const name = String(r["اسم المنفذ"] || r["المنفذ"] || "").trim();
+        const remaining = Number(r["المتبقي"] || 0);
+        if (!name) return;
+        const almanafizId = nameToId.get(name);
+        if (!almanafizId) { notFound.push(name); return; }
+        records.push({ almanafiz_id: almanafizId, month: balanceMonth, remaining_amount: remaining });
+      });
+
+      if (records.length === 0) throw new Error("مفيش سجلات صالحة — تأكدي من أسماء المنافذ");
+
+      const { error } = await supabase
+        .from("outlet_balances")
+        .upsert(records, { onConflict: "almanafiz_id,month" });
+
+      if (error) throw new Error(error.message);
+
+      setBalanceResult({
+        status: "success",
+        message: `تم رفع متبقي ${records.length} منفذ لشهر ${balanceMonth}${notFound.length ? ` — (${notFound.length} اسم مش لاقياه: ${notFound.slice(0, 3).join("، ")}...)` : ""}`,
+      });
+      setBalanceFile(null);
+      if (searched) loadData();
+    } catch (err) {
+      setBalanceResult({
+        status: "error",
+        message: err instanceof Error ? err.message : "خطأ غير متوقع",
+      });
+    } finally {
+      setUploadingBalances(false);
+    }
+  }
+
+  function buildStatementHtml(title: string, rows: LineRow[], balance: number, monthName: string, year: string) {
+    const linesTotal = rows.reduce((s, l) => s + (l.total_price || 0), 0);
+    const total = linesTotal + balance;
     return `
       <div style="font-family: Arial, sans-serif; direction: rtl; color: #1e293b; background: #ffffff; padding: 30px; width: 780px;">
         <div style="text-align:center; margin-bottom:24px; border-bottom:2px solid #1e40af; padding-bottom:16px;">
@@ -157,7 +261,7 @@ export default function KashfPage() {
             <div style="font-size:11px; color:#94a3b8; margin-top:2px;">خط</div>
           </div>
           <div style="flex:1; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:10px; padding:14px; text-align:center;">
-            <div style="font-size:11px; color:#64748b; margin-bottom:6px;">إجمالي المبلغ</div>
+            <div style="font-size:11px; color:#64748b; margin-bottom:6px;">إجمالي المبلغ (شامل المتبقي)</div>
             <div style="font-size:22px; font-weight:bold; color:#1e40af;">${total.toLocaleString()}</div>
             <div style="font-size:11px; color:#94a3b8; margin-top:2px;">جنيه</div>
           </div>
@@ -182,6 +286,12 @@ export default function KashfPage() {
                 <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.total_price.toLocaleString()} جنيه</td>
               </tr>
             `).join("")}
+            ${balance > 0 ? `
+              <tr>
+                <td colspan="4" style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; color:#b45309; font-weight:bold;">متبقي من شهر ${prevMonthLabel}</td>
+                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; color:#b45309; font-weight:bold;">${balance.toLocaleString()} جنيه</td>
+              </tr>
+            ` : ""}
           </tbody>
           <tfoot>
             <tr>
@@ -199,10 +309,10 @@ export default function KashfPage() {
     `;
   }
 
-  async function downloadSinglePdf(title: string, rows: LineRow[], monthName: string, year: string) {
+  async function downloadSinglePdf(title: string, rows: LineRow[], balance: number, monthName: string, year: string) {
     if (!pdfCaptureRef.current) return;
 
-    pdfCaptureRef.current.innerHTML = buildStatementHtml(title, rows, monthName, year);
+    pdfCaptureRef.current.innerHTML = buildStatementHtml(title, rows, balance, monthName, year);
     await new Promise((r) => setTimeout(r, 100));
 
     const html2canvas = (await import("html2canvas-pro")).default;
@@ -244,11 +354,7 @@ export default function KashfPage() {
 
   async function downloadAllPdfs() {
     const [year, month] = filterMonth.split("-");
-    const monthNames = [
-      "يناير", "فبراير", "مارس", "إبريل", "مايو", "يونيو",
-      "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
-    ];
-    const monthName = monthNames[Number(month) - 1];
+    const monthName = MONTH_NAMES_AR[Number(month) - 1];
 
     setGeneratingPdf(true);
     try {
@@ -256,12 +362,12 @@ export default function KashfPage() {
         for (let i = 0; i < linesByOutlet.length; i++) {
           const outlet = linesByOutlet[i];
           setPdfProgress(`جارٍ إنشاء كشف ${i + 1} من ${linesByOutlet.length} (${outlet.name})...`);
-          await downloadSinglePdf(outlet.name, outlet.lines, monthName, year);
+          await downloadSinglePdf(outlet.name, outlet.lines, getBalance(outlet.id), monthName, year);
           await new Promise((r) => setTimeout(r, 600));
         }
       } else {
         setPdfProgress(`جارٍ إنشاء الكشف...`);
-        await downloadSinglePdf(reportTitle, lines, monthName, year);
+        await downloadSinglePdf(reportTitle, lines, getBalance(Number(filterAlmanafiz)), monthName, year);
       }
     } catch (err) {
       console.error(err);
@@ -276,27 +382,35 @@ export default function KashfPage() {
     const [year, month] = filterMonth.split("-");
     const wb = XLSX.utils.book_new();
 
-    function buildSheetRows(rows: LineRow[]) {
-      const total = rows.reduce((s, l) => s + l.total_price, 0);
-      return [
-        ...rows.map((line, i) => ({
-          "#": i + 1,
-          "رقم الخط": line.number,
-          "اسم العميل": line.client_name,
-          "ملاحظات التقرير": line.report_note,
-          "إجمالي الفاتورة": line.total_price,
-        })),
-        { "#": "", "رقم الخط": "", "اسم العميل": "الإجمالي", "ملاحظات التقرير": `${rows.length} خط`, "إجمالي الفاتورة": total } as any,
-      ];
+    function buildSheetRows(rows: LineRow[], balance: number) {
+      const linesTotal = rows.reduce((s, l) => s + l.total_price, 0);
+      const rowsOut: any[] = rows.map((line, i) => ({
+        "#": i + 1,
+        "رقم الخط": line.number,
+        "اسم العميل": line.client_name,
+        "ملاحظات التقرير": line.report_note,
+        "إجمالي الفاتورة": line.total_price,
+      }));
+      if (balance > 0) {
+        rowsOut.push({
+          "#": "", "رقم الخط": "", "اسم العميل": `متبقي من شهر ${prevMonthLabel}`,
+          "ملاحظات التقرير": "", "إجمالي الفاتورة": balance,
+        });
+      }
+      rowsOut.push({
+        "#": "", "رقم الخط": "", "اسم العميل": "الإجمالي",
+        "ملاحظات التقرير": `${rows.length} خط`, "إجمالي الفاتورة": linesTotal + balance,
+      });
+      return rowsOut;
     }
 
     if (isGroupMode) {
       linesByOutlet.forEach((o) => {
-        const ws = XLSX.utils.json_to_sheet(buildSheetRows(o.lines));
+        const ws = XLSX.utils.json_to_sheet(buildSheetRows(o.lines, getBalance(o.id)));
         XLSX.utils.book_append_sheet(wb, ws, o.name.slice(0, 30) || `منفذ`);
       });
     } else {
-      const ws = XLSX.utils.json_to_sheet(buildSheetRows(lines));
+      const ws = XLSX.utils.json_to_sheet(buildSheetRows(lines, getBalance(Number(filterAlmanafiz))));
       XLSX.utils.book_append_sheet(wb, ws, "كشف حساب");
     }
 
@@ -304,6 +418,7 @@ export default function KashfPage() {
   }
 
   if (!authorized) return null;
+  const canEdit = role === "super_admin" || role === "admin";
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-6 md:p-8">
@@ -320,6 +435,53 @@ export default function KashfPage() {
             <p className="text-sm text-slate-500 mt-0.5">استعراض وطباعة كشف حساب لكل منفذ أو جروب كامل</p>
           </div>
         </div>
+
+        {/* رفع متبقي المنافذ */}
+        {canEdit && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-6">
+            <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              <Upload className="w-4 h-4 text-amber-600" />
+              رفع متبقي المنافذ (من شهر سابق)
+            </p>
+            <div className="grid md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">المتبقي ده بتاع شهر</label>
+                <input type="month" value={balanceMonth}
+                  onChange={(e) => setBalanceMonth(e.target.value)}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">ملف Excel</label>
+                <label className={`flex items-center gap-2 border-2 border-dashed rounded-xl px-3 py-2.5 cursor-pointer transition text-sm ${
+                  balanceFile ? "border-green-400 bg-green-50 text-green-700" : "border-slate-200 hover:border-amber-300 text-slate-400"
+                }`}>
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{balanceFile ? balanceFile.name : "اختر ملف .xlsx"}</span>
+                  <input type="file" accept=".xlsx,.xls" className="hidden"
+                    onChange={(e) => { setBalanceFile(e.target.files?.[0] ?? null); setBalanceResult(null); }} />
+                </label>
+              </div>
+              <div className="flex items-end">
+                <button onClick={uploadBalances} disabled={uploadingBalances || !balanceFile || !balanceMonth}
+                  className="w-full flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
+                  {uploadingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  رفع المتبقي
+                </button>
+              </div>
+            </div>
+            {balanceResult && (
+              <div className={`mt-3 flex items-center gap-2 text-sm px-3 py-2 rounded-xl ${
+                balanceResult.status === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+              }`}>
+                {balanceResult.status === "success" ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                {balanceResult.message}
+              </div>
+            )}
+            <p className="text-xs text-slate-400 mt-2">
+              الأعمدة: <span className="font-mono">اسم المنفذ</span> (لازم يطابق الاسم بالظبط في النظام) + <span className="font-mono">المتبقي</span>
+            </p>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-6">
           <div className="grid md:grid-cols-4 gap-4">
@@ -386,7 +548,7 @@ export default function KashfPage() {
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 mb-1.5">الشهر (للعنوان فقط)</label>
+              <label className="block text-xs text-slate-500 mb-1.5">الشهر (يحدد المتبقي المضاف كمان)</label>
               <div className="relative">
                 <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input type="month" value={filterMonth}
@@ -407,14 +569,19 @@ export default function KashfPage() {
 
         {searched && !loading && (
           <>
-            <div className="grid grid-cols-2 gap-4 mb-5">
+            <div className="grid grid-cols-3 gap-4 mb-5">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
                 <p className="text-xs text-slate-400 mb-1">إجمالي الخطوط</p>
                 <p className="text-3xl font-bold text-blue-600">{totalLines}</p>
                 <p className="text-xs text-slate-400 mt-1">خط</p>
               </div>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">إجمالي المبلغ</p>
+                <p className="text-xs text-slate-400 mb-1">متبقي شهر {prevMonthLabel}</p>
+                <p className="text-3xl font-bold text-amber-600">{totalBalance.toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-1">جنيه</p>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
+                <p className="text-xs text-slate-400 mb-1">إجمالي المبلغ (شامل المتبقي)</p>
                 <p className="text-3xl font-bold text-green-600">{totalAmount.toLocaleString()}</p>
                 <p className="text-xs text-slate-400 mt-1">جنيه</p>
               </div>
@@ -443,7 +610,9 @@ export default function KashfPage() {
             {isGroupMode ? (
               <div className="space-y-6">
                 {linesByOutlet.map((outlet) => {
-                  const outletTotal = outlet.lines.reduce((s, l) => s + l.total_price, 0);
+                  const balance = getBalance(outlet.id);
+                  const outletLinesTotal = outlet.lines.reduce((s, l) => s + l.total_price, 0);
+                  const outletTotal = outletLinesTotal + balance;
                   return (
                     <div key={outlet.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
                       <div className="px-6 py-4 border-b border-slate-100 bg-emerald-50/50 flex items-center justify-between">
@@ -451,7 +620,9 @@ export default function KashfPage() {
                           كشف حساب: {outlet.name}
                         </h2>
                         <span className="text-xs text-slate-500">
-                          {outlet.lines.length} خط — {outletTotal.toLocaleString()} جنيه
+                          {outlet.lines.length} خط
+                          {balance > 0 && <span className="text-amber-600 font-medium"> + متبقي {balance.toLocaleString()}</span>}
+                          {" — "}إجمالي {outletTotal.toLocaleString()} جنيه
                         </span>
                       </div>
                       <table className="w-full text-sm">
@@ -474,6 +645,14 @@ export default function KashfPage() {
                               <td className="p-3 font-semibold text-slate-900">{line.total_price.toLocaleString()} جنيه</td>
                             </tr>
                           ))}
+                          {balance > 0 && (
+                            <tr className="border-t border-slate-100 bg-amber-50/50">
+                              <td className="p-3" colSpan={4}>
+                                <span className="text-amber-700 font-medium">متبقي من شهر {prevMonthLabel}</span>
+                              </td>
+                              <td className="p-3 font-bold text-amber-700">{balance.toLocaleString()} جنيه</td>
+                            </tr>
+                          )}
                         </tbody>
                         <tfoot>
                           <tr className="bg-emerald-50 font-bold text-emerald-800 border-t-2 border-emerald-200">
@@ -523,6 +702,14 @@ export default function KashfPage() {
                         <td className="p-3 font-semibold text-slate-900">{line.total_price.toLocaleString()} جنيه</td>
                       </tr>
                     ))}
+                    {getBalance(Number(filterAlmanafiz)) > 0 && (
+                      <tr className="border-t border-slate-100 bg-amber-50/50">
+                        <td className="p-3" colSpan={4}>
+                          <span className="text-amber-700 font-medium">متبقي من شهر {prevMonthLabel}</span>
+                        </td>
+                        <td className="p-3 font-bold text-amber-700">{getBalance(Number(filterAlmanafiz)).toLocaleString()} جنيه</td>
+                      </tr>
+                    )}
                     {lines.length === 0 && (
                       <tr>
                         <td colSpan={5} className="p-10 text-center text-slate-400">

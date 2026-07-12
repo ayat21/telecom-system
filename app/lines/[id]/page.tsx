@@ -37,7 +37,7 @@ function FieldWrap({ label, icon: Icon, children }: {
   );
 }
 
-// ─── Searchable Select ────────────────────────────────────────
+// ─── Searchable Select (لقوائم محدودة زي المنفذ/الشبكة) ───────
 function SearchableSelect({
   value, onChange, options, placeholder, disabled = false,
   getLabel, getValue,
@@ -129,6 +129,84 @@ function SearchableSelect({
   );
 }
 
+// ─── بحث حي للعميل مباشرة من الداتابيز (يحل مشكلة حد الـ 1000 صف) ───
+function ClientLiveSearch({ value, currentClient, onChange }: {
+  value: string | number; currentClient?: any;
+  onChange: (val: string, client?: any) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<any[]>([]);
+  const [open, setOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  useEffect(() => {
+    if (!search.trim()) { setResults([]); return; }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from("clients")
+        .select("id, name, national_id")
+        .or(`name.ilike.%${search}%,national_id.ilike.%${search}%`)
+        .limit(30);
+      setResults(data || []);
+      setSearching(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between border rounded-xl px-3 py-3 text-sm bg-white border-slate-200 hover:border-blue-300 focus:outline-none">
+        <span className={currentClient ? "text-slate-900" : "text-slate-400"}>
+          {currentClient ? currentClient.name : "ابحث باسم العميل أو الرقم القومي..."}
+        </span>
+        {value && (
+          <span onClick={(e) => { e.stopPropagation(); onChange(""); setSearch(""); }}
+            className="text-slate-400 hover:text-slate-600 p-0.5">
+            <X className="w-3.5 h-3.5" />
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute z-30 w-full bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-56 flex flex-col">
+          <div className="p-2 border-b border-slate-100">
+            <input value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="اكتبي اسم العميل أو الرقم القومي..."
+              autoFocus
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-200" />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {searching && <p className="px-3 py-3 text-xs text-slate-400 text-center">جارٍ البحث...</p>}
+            {!searching && results.map((item) => (
+              <button key={item.id} type="button"
+                onClick={() => { onChange(String(item.id), item); setSearch(""); setOpen(false); }}
+                className="w-full text-right px-3 py-2 text-sm hover:bg-slate-50 transition text-slate-700">
+                {item.name} {item.national_id && <span className="text-xs text-slate-400">— {item.national_id}</span>}
+              </button>
+            ))}
+            {!searching && search.trim() && results.length === 0 && (
+              <p className="px-3 py-3 text-xs text-slate-400 text-center">مش لاقي نتايج</p>
+            )}
+            {!search.trim() && (
+              <p className="px-3 py-3 text-xs text-slate-400 text-center">اكتبي حرفين على الأقل للبحث</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const inputClass = "w-full border border-slate-200 bg-white text-slate-900 p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 text-sm";
 const readonlyClass = "w-full border border-slate-200 p-3 rounded-xl bg-slate-100 text-slate-500 text-sm cursor-not-allowed";
 
@@ -206,7 +284,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
 
       const { data } = await supabase
         .from("lines")
-        .select("*, clients(id, name)")
+        .select("*, clients(id, name, national_id)")
         .eq("id", p.id)
         .single();
 
@@ -217,7 +295,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         if (data.provider_id) await loadPackagesStatusesAccounts(data.provider_id);
         if (data.almanafiz_id) await loadPortDetails("almanafiz", data.almanafiz_id);
         if (data.heiaat_id) await loadPortDetails("heiaat", data.heiaat_id);
-        // أضيفي العميل الحالي في القائمة
+        // أضيفي العميل الحالي في القائمة (لعرض اسمه فوراً)
         if (data.clients) {
           setClientsList((prev) => {
             if (prev.some((c) => c.id === data.clients.id)) return prev;
@@ -229,21 +307,19 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     init();
   }, [params]);
 
-  // ─── Load lookups ─────────────────────────────────────────
+  // ─── Load lookups (بدون العملاء — بقى بحث حي منفصل) ────────
   useEffect(() => {
     async function loadLookups() {
-      const [{ data: p }, { data: a }, { data: h }, { data: ag }, { data: cl }] = await Promise.all([
+      const [{ data: p }, { data: a }, { data: h }, { data: ag }] = await Promise.all([
         supabase.from("providers").select("*"),
         supabase.from("almanafiz").select("*, groups(id, name, departments(id, name))"),
         supabase.from("heiaat").select("*, groups(id, name, departments(id, name))"),
         supabase.from("agents").select("*").eq("is_active", true),
-        supabase.from("clients").select("id, name, national_id").order("name"),
       ]);
       setProviders(p || []);
       setAlmanafizList(a || []);
       setHeiaatList(h || []);
       setAgentsList(ag || []);
-      setClientsList(cl || []);
     }
     loadLookups();
   }, []);
@@ -264,7 +340,6 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       durationDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     }
 
-    // جيبي القيم مباشرة من الداتابيز وقت الحفظ (مش من القوائم المحلية)
     const { data: currentLineData } = await supabase
       .from("lines")
       .select("client_id, almanafiz_id, heiaat_id, customer_date_real, clients(name, national_id, address), almanafiz(name), heiaat(name)")
@@ -276,7 +351,6 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     const clientAddress = (currentLineData?.clients as any)?.address || null;
     const almanafizName = (currentLineData?.almanafiz as any)?.name || (currentLineData?.heiaat as any)?.name || null;
 
-    // احفظي في history
     await supabase.from("history").insert({
       number: line.number,
       customer_name: clientName,
@@ -287,7 +361,6 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       action_date: deactiveDate.toISOString(),
     });
 
-    // سجّلي في audit_logs
     await supabase.from("audit_logs").insert({
       user_name: localStorage.getItem("full_name") || "Unknown",
       action_type: "DEACTIVATE",
@@ -300,7 +373,6 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       },
     });
 
-    // حدّثي الخط
     const { error } = await supabase.from("lines").update({
       client_id: null,
       almanafiz_id: null,
@@ -325,22 +397,12 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       heiaat_id: null,
       customer_date_real: null,
       is_deactive: true,
+      clients: null,
     }));
     setOriginalLine((prev: any) => ({ ...prev, is_deactive: true, client_id: null, almanafiz_id: null, heiaat_id: null, customer_date_real: null }));
     setGroupName("");
     setDepartmentName("");
     await loadHistory(id);
-  }
-
-  // ─── Search clients ───────────────────────────────────────
-  async function searchClients(query: string) {
-    if (!query.trim()) return;
-    const { data } = await supabase
-      .from("clients")
-      .select("id, name, national_id")
-      .or(`name.ilike.%${query}%,national_id.ilike.%${query}%`)
-      .limit(20);
-    setClientsList(data || []);
   }
 
   // ─── Auto total ───────────────────────────────────────────
@@ -416,8 +478,8 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
       .select().single();
     setSavingClient(false);
     if (error) { showToast(error.message, "error"); return; }
-    setClientsList((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
-    setLine((prev: any) => ({ ...prev, client_id: data.id }));
+    setClientsList((prev) => [...prev, data]);
+    setLine((prev: any) => ({ ...prev, client_id: data.id, clients: data }));
     setClientForm({ name: "", national_id: "", address: "", national_id_image: "" });
     setClientModalOpen(false);
     showToast("تم إضافة العميل بنجاح", "success");
@@ -480,11 +542,12 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   async function save() {
     const changes: any = {};
 
+    const oldClientName = originalLine.clients?.name || "—";
+    const newClientName = clientsList.find((c) => c.id === Number(line.client_id))?.name
+      || line.clients?.name || (line.client_id ? "—" : "—");
     if (Number(originalLine.client_id) !== Number(line.client_id))
-      changes.client = {
-        old: clientsList.find((c) => c.id === Number(originalLine.client_id))?.name || "—",
-        new: clientsList.find((c) => c.id === Number(line.client_id))?.name || "—",
-      };
+      changes.client = { old: oldClientName, new: newClientName };
+
     if (Number(originalLine.provider_id) !== Number(line.provider_id))
       changes.provider = {
         old: providers.find((p) => p.id === Number(originalLine.provider_id))?.name || "—",
@@ -547,7 +610,6 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     if (originalLine.report_note !== line.report_note)
       changes.report_note = { old: originalLine.report_note || "—", new: line.report_note || "—" };
 
-    // لو الخط كان deactive وحطينا له عميل أو منفذ تاني، نرجّعه active تلقائياً
     const shouldReactivate = Boolean(originalLine.is_deactive) && Boolean(line.client_id || line.almanafiz_id || line.heiaat_id);
     if (shouldReactivate) {
       changes.status = { old: "ملغى (Deactive)", new: "مفعّل" };
@@ -603,6 +665,8 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
     </div>
   );
 
+  const currentClient = clientsList.find((c) => c.id === Number(line.client_id)) || line.clients;
+
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-6 md:p-8">
 
@@ -621,7 +685,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
         </div>
       )}
 
-      {/* Deactivate confirm modal (بديل confirm() الافتراضي) */}
+      {/* Deactivate confirm modal */}
       <ConfirmModal
         open={deactivateModalOpen}
         title="إلغاء تفعيل الخط"
@@ -698,27 +762,27 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
           </div>
         </div>
 
-        {/* العميل */}
+        {/* العميل — بحث حي مباشر من الداتابيز */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-5">
           <SectionTitle title="العميل" icon={User} />
           <FieldWrap label="اسم العميل" icon={User}>
-            <div className="space-y-3">
-              <SearchableSelect
-                value={line.client_id || ""}
-                onChange={(val) => setLine({ ...line, client_id: val })}
-                options={clientsList}
-                placeholder="ابحث باسم العميل أو الرقم القومي..."
-                getLabel={(item) => item.name}
-                getValue={(item) => item.id}
-              />
-                <button type="button" onClick={() => setClientModalOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-50 border border-blue-200 px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-100 transition">
-                  <PlusCircle className="w-4 h-4" />
-                </button>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <ClientLiveSearch
+                  value={line.client_id || ""}
+                  currentClient={currentClient}
+                  onChange={(val, client) => {
+                    setLine({ ...line, client_id: val, clients: client || null });
+                    if (client) setClientsList((prev) => prev.some((c) => c.id === client.id) ? prev : [...prev, client]);
+                  }}
+                />
+              </div>
+              <button type="button" onClick={() => setClientModalOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-50 border border-blue-200 px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-100 transition shrink-0">
+                <PlusCircle className="w-4 h-4" />
+              </button>
             </div>
           </FieldWrap>
-
-        
         </div>
 
         {/* بيانات الشبكة */}
