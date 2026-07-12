@@ -81,8 +81,8 @@ export default function KashfPage() {
 
   const totalLines = lines.length;
   const totalAmountRaw = lines.reduce((s, l) => s + (l.total_price || 0), 0);
-  const totalBalance = [...new Set(lines.map((l) => l.almanafiz_id).filter(Boolean))]
-    .reduce((s, id) => s + getBalance(id as number), 0);
+  const totalBalance = [...new Set(lines.map((l) => l.almanafiz_id).filter((id): id is number => Boolean(id)))]
+  .reduce((s: number, id: number) => s + getBalance(id), 0);
   const totalAmount = totalAmountRaw + totalBalance;
 
   const filteredAlmanafiz = almanafizSearch.trim()
