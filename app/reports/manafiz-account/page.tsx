@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight,
 } from "lucide-react";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 35;
 
 interface OutletRow {
   almanafiz_id: number;
@@ -26,7 +26,8 @@ interface ProviderSummary {
   total: number;
   paid: number;
   unpaid: number;
-  invoice: number;
+  required: number;   // إجمالي المطلوب (مجموع total_price)
+  collected: number;  // إجمالي المحصل الفعلي (مجموع مبالغ السدادات الحقيقية)
 }
 
 export default function ManafizAccountReportPage() {
@@ -87,16 +88,19 @@ export default function ManafizAccountReportPage() {
       offset += 1000;
     }
 
-    const paidNumbers = new Set<string>();
+    // ─── مبالغ السدادات الفعلية لكل رقم خط في الشهر ده ────────
+    const paidAmountByLine = new Map<string, number>();
     let pOffset = 0;
     while (true) {
       const { data } = await supabase
         .from("payments")
-        .select("line_number")
+        .select("line_number, amount")
         .eq("payment_month", filterMonth)
         .range(pOffset, pOffset + 999);
       if (!data || data.length === 0) break;
-      data.forEach((p: any) => paidNumbers.add(p.line_number));
+      data.forEach((p: any) => {
+        paidAmountByLine.set(p.line_number, (paidAmountByLine.get(p.line_number) || 0) + (p.amount || 0));
+      });
       if (data.length < 1000) break;
       pOffset += 1000;
     }
@@ -110,14 +114,16 @@ export default function ManafizAccountReportPage() {
 
       if (!providerSummaryMap.has(providerId)) {
         const pName = providersList.find((p) => p.id === providerId)?.name || "—";
-        providerSummaryMap.set(providerId, { id: providerId, name: pName, total: 0, paid: 0, unpaid: 0, invoice: 0 });
+        providerSummaryMap.set(providerId, { id: providerId, name: pName, total: 0, paid: 0, unpaid: 0, required: 0, collected: 0 });
       }
       const pSum = providerSummaryMap.get(providerId)!;
       pSum.total++;
-      pSum.invoice += line.total_price || 0;
+      pSum.required += line.total_price || 0;
 
-      const isPaid = paidNumbers.has(line.number);
+      const collectedAmount = paidAmountByLine.get(line.number) || 0;
+      const isPaid = paidAmountByLine.has(line.number);
       if (isPaid) pSum.paid++; else pSum.unpaid++;
+      pSum.collected += collectedAmount;
 
       if (!outletsMap.has(providerId)) outletsMap.set(providerId, new Map());
       const outMap = outletsMap.get(providerId)!;
@@ -161,15 +167,21 @@ export default function ManafizAccountReportPage() {
       "إجمالي الأرقام": s.total,
       "المسددين": s.paid,
       "الغير مسددين": s.unpaid,
-      [`فاتورة ${filterMonth}`]: s.invoice,
+      "نسبة السداد": s.total > 0 ? `${Math.round((s.paid / s.total) * 100)}%` : "0%",
+      "إجمالي المطلوب": s.required,
+      "إجمالي المحصل": s.collected,
     }));
+    const totalRequiredCount = summary.reduce((s, x) => s + x.total, 0);
+    const totalPaidCount = summary.reduce((s, x) => s + x.paid, 0);
     const totalsRow = {
       "المنافذ": "إجمالي",
-      "إجمالي المنافذ": Object.values(outletsByProvider).reduce((s, arr) => s + arr.length, 0),
-      "إجمالي الأرقام": summary.reduce((s, x) => s + x.total, 0),
-      "المسددين": summary.reduce((s, x) => s + x.paid, 0),
+      "إجمالي المنافذ": distinctOutletsCount,
+      "إجمالي الأرقام": totalRequiredCount,
+      "المسددين": totalPaidCount,
       "الغير مسددين": summary.reduce((s, x) => s + x.unpaid, 0),
-      [`فاتورة ${filterMonth}`]: summary.reduce((s, x) => s + x.invoice, 0),
+      "نسبة السداد": totalRequiredCount > 0 ? `${Math.round((totalPaidCount / totalRequiredCount) * 100)}%` : "0%",
+      "إجمالي المطلوب": summary.reduce((s, x) => s + x.required, 0),
+      "إجمالي المحصل": summary.reduce((s, x) => s + x.collected, 0),
     };
     const wsSummary = XLSX.utils.json_to_sheet([...summaryRows, totalsRow]);
     XLSX.utils.book_append_sheet(wb, wsSummary, "ملخص");
@@ -251,13 +263,23 @@ export default function ManafizAccountReportPage() {
 
   if (!authorized) return null;
 
+  const distinctOutletsCount = (() => {
+    const ids = new Set<number>();
+    Object.values(outletsByProvider).forEach((arr) => arr.forEach((o) => ids.add(o.almanafiz_id)));
+    return ids.size;
+  })();
+
   const totalsSummary = {
-    outlets: Object.values(outletsByProvider).reduce((s, arr) => s + arr.length, 0),
+    outlets: distinctOutletsCount,
     total: summary.reduce((s, x) => s + x.total, 0),
     paid: summary.reduce((s, x) => s + x.paid, 0),
     unpaid: summary.reduce((s, x) => s + x.unpaid, 0),
-    invoice: summary.reduce((s, x) => s + x.invoice, 0),
+    required: summary.reduce((s, x) => s + x.required, 0),
+    collected: summary.reduce((s, x) => s + x.collected, 0),
   };
+  const totalCollectionRate = totalsSummary.total > 0
+    ? Math.round((totalsSummary.paid / totalsSummary.total) * 100)
+    : 0;
 
   const allActiveOutlets = activeProviderId ? outletsByProvider[activeProviderId] || [] : [];
   const detailTotalPages = Math.max(1, Math.ceil(allActiveOutlets.length / PAGE_SIZE));
@@ -270,13 +292,13 @@ export default function ManafizAccountReportPage() {
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <span className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center shrink-0">
-              <FileBarChart2 className="w-6 h-6 text-indigo-600" />
+          <div className="flex items-center gap-4">
+            <span className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center shrink-0">
+              <FileBarChart2 className="w-7 h-7 text-indigo-600" />
             </span>
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-slate-900">تقرير حساب المنافذ</h1>
-              <p className="text-sm text-slate-500 mt-0.5">ملخص وتفصيل السداد لكل منفذ حسب الشبكة والشهر</p>
+              <h1 className="text-3xl md:text-4xl font-bold text-slate-900">تقرير حساب المنافذ</h1>
+              <p className="text-base text-slate-500 mt-1">ملخص وتفصيل السداد لكل منفذ حسب الشبكة والشهر</p>
             </div>
           </div>
           {loaded && (
@@ -305,19 +327,19 @@ export default function ManafizAccountReportPage() {
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-6">
           <div className="flex flex-wrap items-end gap-3">
             <div>
-              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
-                <Calendar className="w-3.5 h-3.5" /> الشهر
+              <label className="flex items-center gap-1.5 text-sm text-slate-500 mb-1.5">
+                <Calendar className="w-4 h-4" /> الشهر
               </label>
               <input type="month" value={filterMonth}
                 onChange={(e) => setFilterMonth(e.target.value)}
-                className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-indigo-200" />
             </div>
             <div>
-              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
-                <Building2 className="w-3.5 h-3.5" /> القسم
+              <label className="flex items-center gap-1.5 text-sm text-slate-500 mb-1.5">
+                <Building2 className="w-4 h-4" /> القسم
               </label>
               <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
-                className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 min-w-[180px]">
+                className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-base text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 min-w-[180px]">
                 <option value="">كل الأقسام</option>
                 {departmentsList.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
@@ -325,7 +347,7 @@ export default function ManafizAccountReportPage() {
               </select>
             </div>
             <button onClick={loadReport} disabled={loading || !filterMonth}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium text-base transition">
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileBarChart2 className="w-4 h-4" />}
               عرض التقرير
             </button>
@@ -343,38 +365,48 @@ export default function ManafizAccountReportPage() {
             {/* Summary Table */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-6">
               <div className="p-4 border-b border-slate-100 bg-indigo-50/50 flex items-center justify-between">
-                <h2 className="text-sm font-bold text-indigo-700">ملخص حساب المنافذ — {filterMonth}</h2>
+                <h2 className="text-lg font-bold text-indigo-700">ملخص حساب المنافذ — {filterMonth}</h2>
                 {filterDepartment && (
-                  <span className="text-xs bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
+                  <span className="text-sm bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
                     {departmentsList.find((d) => String(d.id) === filterDepartment)?.name}
                   </span>
                 )}
               </div>
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs">
+              <table className="w-full text-base">
+                <thead className="bg-slate-50 text-slate-700 text-sm">
                   <tr>
                     <th className="p-3 text-right font-medium">المنافذ</th>
                     <th className="p-3 text-right font-medium">إجمالي المنافذ</th>
                     <th className="p-3 text-right font-medium">إجمالي الأرقام</th>
                     <th className="p-3 text-right font-medium">المسددين</th>
                     <th className="p-3 text-right font-medium">الغير مسددين</th>
-                    <th className="p-3 text-right font-medium">فاتورة {filterMonth}</th>
+                    <th className="p-3 text-right font-medium">نسبة السداد</th>
+                
+                    <th className="p-3 text-right font-medium">إجمالي المحصل</th>
                   </tr>
                 </thead>
                 <tbody className="text-slate-700">
-                  {summary.map((s) => (
-                    <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
-                      <td className="p-3 font-bold text-slate-900">{s.name}</td>
-                      <td className="p-3">{(outletsByProvider[s.id] || []).length}</td>
-                      <td className="p-3 font-medium">{s.total.toLocaleString()}</td>
-                      <td className="p-3 text-green-600 font-medium">{s.paid.toLocaleString()}</td>
-                      <td className="p-3 text-red-500 font-medium">{s.unpaid.toLocaleString()}</td>
-                      <td className="p-3 font-bold text-indigo-700">{s.invoice.toLocaleString()}</td>
-                    </tr>
-                  ))}
+                  {summary.map((s) => {
+                    const rate = s.total > 0 ? Math.round((s.paid / s.total) * 100) : 0;
+                    return (
+                      <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition">
+                        <td className="p-3 font-bold text-slate-900">{s.name}</td>
+                        <td className="p-3">{(outletsByProvider[s.id] || []).length}</td>
+                        <td className="p-3 font-medium">{s.total.toLocaleString()}</td>
+                        <td className="p-3 text-green-600 font-medium">{s.paid.toLocaleString()}</td>
+                        <td className="p-3 text-red-500 font-medium">{s.unpaid.toLocaleString()}</td>
+                        <td className="p-3">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-blue-50 text-blue-700">
+                            {rate}%
+                          </span>
+                        </td>
+                        <td className="p-3 font-bold text-purple-700">{s.collected.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
                   {summary.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="p-10 text-center text-slate-400">لا توجد بيانات لهذا الفلتر</td>
+                      <td colSpan={8} className="p-10 text-center text-slate-400">لا توجد بيانات لهذا الفلتر</td>
                     </tr>
                   )}
                   {summary.length > 0 && (
@@ -384,7 +416,12 @@ export default function ManafizAccountReportPage() {
                       <td className="p-3">{totalsSummary.total.toLocaleString()}</td>
                       <td className="p-3 text-green-700">{totalsSummary.paid.toLocaleString()}</td>
                       <td className="p-3 text-red-600">{totalsSummary.unpaid.toLocaleString()}</td>
-                      <td className="p-3 text-indigo-700">{totalsSummary.invoice.toLocaleString()}</td>
+                      <td className="p-3">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-indigo-100 text-indigo-700">
+                          {totalCollectionRate}%
+                        </span>
+                      </td>
+                      <td className="p-3 text-purple-700">{totalsSummary.collected.toLocaleString()}</td>
                     </tr>
                   )}
                 </tbody>
@@ -397,10 +434,10 @@ export default function ManafizAccountReportPage() {
                 <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-sm mb-4 w-fit">
                   {summary.map((s) => (
                     <button key={s.id} onClick={() => { setActiveProviderId(s.id); setDetailPage(1); }}
-                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-base font-medium transition ${
                         activeProviderId === s.id ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"
                       }`}>
-                      <Network className="w-3.5 h-3.5" /> {s.name}
+                      <Network className="w-4 h-4" /> {s.name}
                     </button>
                   ))}
                 </div>
@@ -408,15 +445,15 @@ export default function ManafizAccountReportPage() {
                 {/* Detail Table */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-auto">
                   <div className="p-4 border-b border-slate-100 bg-emerald-50/50 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-emerald-700">
+                    <h2 className="text-lg font-bold text-emerald-700">
                       حساب المنفذ لشهر {filterMonth} ({activeProviderName})
                     </h2>
-                    <span className="text-xs text-slate-500">
+                    <span className="text-sm text-slate-500">
                       {allActiveOutlets.length.toLocaleString()} منفذ — صفحة {detailPage} من {detailTotalPages}
                     </span>
                   </div>
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <table className="w-full text-base">
+                    <thead className="bg-slate-50 text-slate-700 text-sm">
                       <tr>
                         <th className="p-3 text-right font-medium">N</th>
                         <th className="p-3 text-right font-medium">المنافذ</th>
@@ -441,12 +478,12 @@ export default function ManafizAccountReportPage() {
                             <td className="p-3 text-green-600">{o.paid.toLocaleString()}</td>
                             <td className="p-3 text-red-500">{o.unpaid.toLocaleString()}</td>
                             <td className="p-3">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-green-50 text-green-700">
                                 {paidPct}%
                               </span>
                             </td>
                             <td className="p-3">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-red-50 text-red-600">
                                 {unpaidPct}%
                               </span>
                             </td>
@@ -464,15 +501,15 @@ export default function ManafizAccountReportPage() {
                   {/* Pagination */}
                   {detailTotalPages > 1 && (
                     <div className="flex justify-between items-center p-4 border-t border-slate-100" dir="ltr">
-                      <span className="text-xs text-slate-400">{allActiveOutlets.length.toLocaleString()} منفذ</span>
+                      <span className="text-sm text-slate-400">{allActiveOutlets.length.toLocaleString()} منفذ</span>
                       <div className="flex items-center gap-2">
                         <button disabled={detailPage === 1} onClick={() => setDetailPage((p) => p - 1)}
-                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition disabled:opacity-40 text-sm font-medium">
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition disabled:opacity-40 text-base font-medium">
                           <ChevronLeft className="w-4 h-4" /> السابق
                         </button>
-                        <span className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm">{detailPage}</span>
+                        <span className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-base">{detailPage}</span>
                         <button disabled={detailPage >= detailTotalPages} onClick={() => setDetailPage((p) => p + 1)}
-                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition disabled:opacity-40 text-sm font-medium">
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition disabled:opacity-40 text-base font-medium">
                           التالي <ChevronRight className="w-4 h-4" />
                         </button>
                       </div>
@@ -485,7 +522,7 @@ export default function ManafizAccountReportPage() {
         )}
 
         {!loading && !loaded && (
-          <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-400">
+          <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-400 text-lg">
             اختاري الشهر واضغطي "عرض التقرير"
           </div>
         )}
