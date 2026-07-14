@@ -600,17 +600,13 @@ async function downloadSinglePdf(title: string, rows: LineRow[], balance: number
 
         {searched && !loading && (
           <>
-            <div className="grid grid-cols-3 gap-4 mb-5">
+            <div className="grid grid-cols-2 gap-6 mb-5">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
                 <p className="text-xs text-slate-400 mb-1">عدد المسددين</p>
                 <p className="text-3xl font-bold text-blue-600">{totalLines}</p>
                 <p className="text-xs text-slate-400 mt-1">خط</p>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">متبقي شهر {prevMonthLabel}</p>
-                <p className="text-3xl font-bold text-amber-600">{totalBalance.toLocaleString()}</p>
-                <p className="text-xs text-slate-400 mt-1">جنيه</p>
-              </div>
+              
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
                 <p className="text-xs text-slate-400 mb-1">إجمالي المحصل (شامل المتبقي)</p>
                 <p className="text-3xl font-bold text-green-600">{totalAmount.toLocaleString()}</p>
