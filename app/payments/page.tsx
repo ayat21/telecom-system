@@ -18,6 +18,14 @@ const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
 // رابط Google Sheet المنشور كـ CSV
 const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS9OSpK1_ukTAgEP8emp5epTtdcCA1-a4iDSQ375wo6n_4sNaXVNwfwM-tfdrddrpU0P4TTElhCDHGG/pub?gid=1700747738&single=true&output=csv";
 
+interface LineInfo {
+  number: string;
+  total_price: number;
+  providerName: string;
+  almanafizName: string;
+  accountNo: string;
+}
+
 function StatCard({ label, value, suffix, icon: Icon, iconBg, iconColor, valueColor }: {
   label: string; value: string | number; suffix?: string;
   icon: React.ElementType; iconBg: string; iconColor: string; valueColor: string;
@@ -57,8 +65,8 @@ export default function PaymentsPage() {
   const [departmentsList, setDepartmentsList] = useState<any[]>([]);
   const [providersList, setProvidersList] = useState<any[]>([]);
 
-  // نطاق الأرقام المسموح بيها حسب فلتر القسم/الشبكة
-  const [scopedNumbers, setScopedNumbers] = useState<string[] | null>(null);
+  // نطاق الأرقام المسموح بيها حسب فلتر القسم/الشبكة (null = بدون فلتر)
+  const [scopedNumbers, setScopedNumbers] = useState<Set<string> | null>(null);
 
   // Stats
   const [statsLoading, setStatsLoading] = useState(false);
@@ -70,8 +78,10 @@ export default function PaymentsPage() {
     paidLinesCount: 0,
     unpaidLinesCount: 0,
   });
-  const [unpaidList, setUnpaidList] = useState<{ number: string; total_price: number }[]>([]);
+  const [unpaidList, setUnpaidList] = useState<LineInfo[]>([]);
+  const [paidList, setPaidList] = useState<(LineInfo & { amount: number })[]>([]);
   const [exportingUnpaid, setExportingUnpaid] = useState(false);
+  const [exportingPaid, setExportingPaid] = useState(false);
 
   // Import (Google Sheet)
   const [sheetImportMonth, setSheetImportMonth] = useState("");
@@ -99,12 +109,46 @@ export default function PaymentsPage() {
   }, []);
 
   // ─── Load payments (الجدول) ────────────────────────────────
-  async function loadPayments(numbersScope: string[] | null) {
+  async function loadPayments(numbersScope: Set<string> | null) {
     setLoading(true);
 
-    if (numbersScope !== null && numbersScope.length === 0) {
-      setPayments([]);
-      setTotal(0);
+    const searchTerm = search.trim().toLowerCase();
+
+    if (numbersScope !== null) {
+      if (numbersScope.size === 0) {
+        setPayments([]);
+        setTotal(0);
+        setLoading(false);
+        return;
+      }
+
+      let allMatching: any[] = [];
+      let offset = 0;
+      while (true) {
+        let q = supabase.from("payments").select("*").range(offset, offset + 999);
+        if (filterCode) q = q.eq("payment_code", filterCode);
+        const { data, error } = await q;
+        if (error) { console.error(error); break; }
+        if (!data || data.length === 0) break;
+
+        data.forEach((p: any) => {
+          if (!numbersScope.has(p.line_number)) return;
+          if (searchTerm) {
+            const matchesSearch =
+              (p.line_number || "").toLowerCase().includes(searchTerm) ||
+              (p.billing_account_number || "").toLowerCase().includes(searchTerm);
+            if (!matchesSearch) return;
+          }
+          allMatching.push(p);
+        });
+
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+
+      allMatching.sort((a, b) => b.id - a.id);
+      setTotal(allMatching.length);
+      setPayments(allMatching.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
       setLoading(false);
       return;
     }
@@ -119,10 +163,9 @@ export default function PaymentsPage() {
       query = query.or(`line_number.ilike.%${search}%,billing_account_number.ilike.%${search}%`);
     if (filterCode)
       query = query.eq("payment_code", filterCode);
-    if (numbersScope !== null)
-      query = query.in("line_number", numbersScope);
 
-    const { data, count } = await query;
+    const { data, count, error } = await query;
+    if (error) console.error(error);
     setPayments(data || []);
     setTotal(count || 0);
     setLoading(false);
@@ -177,18 +220,18 @@ export default function PaymentsPage() {
     return null;
   }
 
-  // ─── جيبي أرقام الخطوط اللي جوا نطاق القسم/الشبكة ─────────
-  async function loadScopedLines(): Promise<{ number: string; total_price: number }[]> {
+  // ─── جيبي أرقام الخطوط اللي جوا نطاق القسم/الشبكة (بتفاصيل الشبكة/المنفذ/الحساب) ───
+  async function loadScopedLines(): Promise<LineInfo[]> {
     let lineQuery = supabase
       .from("lines")
-      .select("number, total_price, departments(name)")
+      .select("number, total_price, account_id, departments(name), providers(name), almanafiz(name)")
       .or("is_deleted.is.null,is_deleted.eq.false")
       .not("department_id", "is", null);
 
     if (filterDepartment) lineQuery = lineQuery.eq("department_id", Number(filterDepartment));
     if (filterProvider) lineQuery = lineQuery.eq("provider_id", Number(filterProvider));
 
-    let result: { number: string; total_price: number }[] = [];
+    let rawLines: any[] = [];
     let lOffset = 0;
     while (true) {
       const { data } = await lineQuery.range(lOffset, lOffset + 999);
@@ -198,11 +241,29 @@ export default function PaymentsPage() {
         ? data
         : data.filter((l: any) => !EXCLUDED_DEPARTMENTS.includes(l.departments?.name || ""));
 
-      result.push(...filtered.map((l: any) => ({ number: l.number, total_price: l.total_price || 0 })));
+      rawLines.push(...filtered);
       if (data.length < 1000) break;
       lOffset += 1000;
     }
-    return result;
+
+    // ─── هاتي account_no لكل account_id على خطوتين بسيطتين (بدون join) ───
+    const accountIds = [...new Set(rawLines.map((l) => l.account_id).filter(Boolean))];
+    const accountIdToNo = new Map<number, string>();
+    for (let i = 0; i < accountIds.length; i += 1000) {
+      const { data } = await supabase
+        .from("accounts")
+        .select("id, account_no")
+        .in("id", accountIds.slice(i, i + 1000));
+      (data || []).forEach((a: any) => accountIdToNo.set(a.id, a.account_no));
+    }
+
+    return rawLines.map((l: any) => ({
+      number: l.number,
+      total_price: l.total_price || 0,
+      providerName: l.providers?.name || "—",
+      almanafizName: l.almanafiz?.name || "—",
+      accountNo: (l.account_id && accountIdToNo.get(l.account_id)) || "—",
+    }));
   }
 
   // ─── Load stats + نطاق الأرقام ─────────────────────────────
@@ -235,7 +296,12 @@ export default function PaymentsPage() {
     const totalUnpaidAmount = Math.max(totalRequired - totalCollected, 0);
     const collectionRate = totalRequired > 0 ? (totalCollected / totalRequired) * 100 : 0;
 
+    const paid = departmentLines
+      .filter((l) => paidAmountByLine.has(l.number))
+      .map((l) => ({ ...l, amount: paidAmountByLine.get(l.number) || 0 }));
+
     setUnpaidList(unpaid);
+    setPaidList(paid);
     setStats({
       totalRequired,
       totalCollected,
@@ -249,7 +315,7 @@ export default function PaymentsPage() {
       .from("payments").select("payment_code").limit(10000);
     setCodes([...new Set((codesData || []).map((p) => p.payment_code).filter(Boolean))]);
 
-    const numbersScope = hasFilter ? [...lineNumberSet] : null;
+    const numbersScope = hasFilter ? lineNumberSet : null;
     setScopedNumbers(numbersScope);
     setStatsLoading(false);
     return numbersScope;
@@ -319,20 +385,36 @@ export default function PaymentsPage() {
 
       if (records.length === 0) throw new Error("مفيش سجلات صالحة في الشيت");
 
+      // ─── رقم الحساب: من رقم الخط → account_id → account_no (خطوتين بسيطتين) ───
       setSheetText("جارٍ جلب أرقام الحسابات...");
       const allNumbers = [...new Set(records.map((r) => r.line_number))];
       const accountMap = new Map<string, string>();
 
+      const lineToAccountId = new Map<string, number>();
       for (let i = 0; i < allNumbers.length; i += 1000) {
         const { data } = await supabase
           .from("lines")
-          .select("number, accounts(account_no)")
+          .select("number, account_id")
           .in("number", allNumbers.slice(i, i + 1000));
         (data || []).forEach((l: any) => {
-          if (l.accounts?.account_no)
-            accountMap.set(l.number, l.accounts.account_no);
+          if (l.account_id) lineToAccountId.set(l.number, l.account_id);
         });
       }
+
+      const accountIds = [...new Set([...lineToAccountId.values()])];
+      const accountIdToNo = new Map<number, string>();
+      for (let i = 0; i < accountIds.length; i += 1000) {
+        const { data } = await supabase
+          .from("accounts")
+          .select("id, account_no")
+          .in("id", accountIds.slice(i, i + 1000));
+        (data || []).forEach((a: any) => accountIdToNo.set(a.id, a.account_no));
+      }
+
+      lineToAccountId.forEach((accId, number) => {
+        const accNo = accountIdToNo.get(accId);
+        if (accNo) accountMap.set(number, accNo);
+      });
 
       const finalRecords = records.map((r) => ({
         ...r,
@@ -403,13 +485,16 @@ export default function PaymentsPage() {
     }
   }
 
-  // ─── تصدير الغير مسددين ───────────────────────────────────
+  // ─── تصدير الغير مسددين (مع الشبكة والمنفذ ورقم الحساب) ────
   function exportUnpaid() {
     if (unpaidList.length === 0) { alert("لا توجد أرقام غير مسددة حسب الفلتر الحالي"); return; }
     setExportingUnpaid(true);
     try {
       const rows = unpaidList.map((l) => ({
         "رقم الخط": l.number,
+        "الشبكة": l.providerName,
+        "رقم الحساب": l.accountNo,
+        "المنفذ": l.almanafizName,
         "المبلغ المطلوب": l.total_price,
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -421,15 +506,52 @@ export default function PaymentsPage() {
     }
   }
 
+  // ─── تصدير المسددين (مع الشبكة والمنفذ ورقم الحساب) ────────
+  function exportPaid() {
+    if (paidList.length === 0) { alert("لا توجد أرقام مسددة حسب الفلتر الحالي"); return; }
+    setExportingPaid(true);
+    try {
+      const rows = paidList.map((l) => ({
+        "رقم الخط": l.number,
+        "الشبكة": l.providerName,
+        "رقم الحساب": l.accountNo,
+        "المنفذ": l.almanafizName,
+        "المبلغ المحصل": l.amount,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "مسدد");
+      XLSX.writeFile(wb, `paid.xlsx`);
+    } finally {
+      setExportingPaid(false);
+    }
+  }
+
   // ─── Export الجدول ────────────────────────────────────────
   async function exportToExcel() {
+    if (scopedNumbers !== null) {
+      let allMatching: any[] = [];
+      let offset = 0;
+      while (true) {
+        let q = supabase.from("payments").select("*").range(offset, offset + 999);
+        if (filterCode) q = q.eq("payment_code", filterCode);
+        const { data } = await q;
+        if (!data || data.length === 0) break;
+        data.forEach((p: any) => { if (scopedNumbers.has(p.line_number)) allMatching.push(p); });
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+      writeExcelRows(allMatching);
+      return;
+    }
+
     let query = supabase.from("payments").select("*").order("id", { ascending: false });
     if (filterCode) query = query.eq("payment_code", filterCode);
-    if (scopedNumbers !== null) query = query.in("line_number", scopedNumbers);
-
     const { data } = await query.limit(100000);
-    if (!data) return;
+    writeExcelRows(data || []);
+  }
 
+  function writeExcelRows(data: any[]) {
     const rows = data.map((p) => ({
       "رقم الخط": p.line_number,
       "رقم الحساب": p.billing_account_number,
@@ -515,7 +637,12 @@ export default function PaymentsPage() {
                 icon={UserX} iconBg="bg-orange-50" iconColor="text-orange-600" valueColor="text-orange-600" />
             </div>
 
-            <div className="flex justify-end mb-6">
+            <div className="flex flex-wrap justify-end gap-3 mb-6">
+              <button onClick={exportPaid} disabled={exportingPaid || stats.paidLinesCount === 0}
+                className="flex items-center gap-2 bg-green-50 hover:bg-green-100 disabled:opacity-50 text-green-700 px-5 py-2.5 rounded-xl font-medium text-sm transition border border-green-100">
+                {exportingPaid ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                تحميل قائمة المسددين ({stats.paidLinesCount})
+              </button>
               <button onClick={exportUnpaid} disabled={exportingUnpaid || stats.unpaidLinesCount === 0}
                 className="flex items-center gap-2 bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 px-5 py-2.5 rounded-xl font-medium text-sm transition border border-red-100">
                 {exportingUnpaid ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}

@@ -14,7 +14,7 @@ interface LineRow {
   number: string;
   client_name: string;
   report_note: string;
-  total_price: number;
+  total_price: number; // المبلغ المسدد فعلياً (من payments) مش المفروض
   almanafiz_id?: number;
   almanafiz_name?: string;
 }
@@ -26,7 +26,7 @@ const MONTH_NAMES_AR = [
 
 function getPrevMonth(monthStr: string): string {
   const [y, m] = monthStr.split("-").map(Number);
-  const d = new Date(y, m - 1 - 1, 1); // شهر قبل الحالي
+  const d = new Date(y, m - 1 - 1, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -82,7 +82,7 @@ export default function KashfPage() {
   const totalLines = lines.length;
   const totalAmountRaw = lines.reduce((s, l) => s + (l.total_price || 0), 0);
   const totalBalance = [...new Set(lines.map((l) => l.almanafiz_id).filter((id): id is number => Boolean(id)))]
-  .reduce((s: number, id: number) => s + getBalance(id), 0);
+    .reduce((s: number, id: number) => s + getBalance(id), 0);
   const totalAmount = totalAmountRaw + totalBalance;
 
   const filteredAlmanafiz = almanafizSearch.trim()
@@ -139,17 +139,18 @@ export default function KashfPage() {
     setAlmanafizSearch("");
   }
 
+  // ─── جيب الخطوط المسددة فقط في الشهر المختار، بمبالغ من payments ───
   async function loadData() {
     if (!filterAlmanafiz && !filterGroup) { alert("اختاري المنفذ أو الجروب"); return; }
+    if (!filterMonth) { alert("اختاري الشهر"); return; }
 
     setLoading(true);
     setSearched(true);
 
     let query = supabase
       .from("lines")
-      .select(`id, number, total_price, report_note, clients(name), almanafiz!inner(id, name, group_id)`)
+      .select(`id, number, report_note, clients(name), almanafiz!inner(id, name, group_id)`)
       .or("is_deleted.is.null,is_deleted.eq.false")
-      .or("is_deactive.is.null,is_deactive.eq.false")
       .order("id", { ascending: true });
 
     if (filterGroup) {
@@ -162,19 +163,41 @@ export default function KashfPage() {
 
     if (error) { setLoading(false); alert(error.message); return; }
 
-    const mappedLines = (data || []).map((l: any) => ({
+    const rawLines = (data || []).map((l: any) => ({
       id: l.id,
       number: l.number,
       client_name: l.clients?.name || "—",
       report_note: l.report_note || "—",
-      total_price: l.total_price || 0,
       almanafiz_id: l.almanafiz?.id,
       almanafiz_name: l.almanafiz?.name || "—",
     }));
-    setLines(mappedLines);
+
+    // ─── جيبي المبالغ الفعلية من جدول payments للشهر المختار بس ───
+    const numbersInReport = rawLines.map((l) => l.number);
+    const paidAmountByNumber = new Map<string, number>();
+    for (let i = 0; i < numbersInReport.length; i += 1000) {
+      const { data: payData } = await supabase
+        .from("payments")
+        .select("line_number, amount")
+        .eq("payment_month", filterMonth)
+        .in("line_number", numbersInReport.slice(i, i + 1000));
+      (payData || []).forEach((p: any) => {
+        paidAmountByNumber.set(p.line_number, (paidAmountByNumber.get(p.line_number) || 0) + (p.amount || 0));
+      });
+    }
+
+    // ─── بس الأرقام اللي ليها سداد فعلي في الشهر ده، والمبلغ = المسدد الفعلي ───
+    const paidOnly: LineRow[] = rawLines
+      .filter((l) => paidAmountByNumber.has(l.number))
+      .map((l) => ({ ...l, total_price: paidAmountByNumber.get(l.number) || 0 }));
+
+    // ترتيب أبجدي بالاسم
+    paidOnly.sort((a, b) => a.client_name.localeCompare(b.client_name, "ar"));
+
+    setLines(paidOnly);
 
     // ─── جيبي متبقي الشهر السابق للمنافذ دي ──────────────────
-    const outletIds = [...new Set(mappedLines.map((l) => l.almanafiz_id).filter(Boolean))] as number[];
+    const outletIds = [...new Set(paidOnly.map((l) => l.almanafiz_id).filter(Boolean))] as number[];
     if (outletIds.length > 0) {
       const prev = getPrevMonth(filterMonth);
       const { data: balData } = await supabase
@@ -245,78 +268,101 @@ export default function KashfPage() {
     }
   }
 
-  function buildStatementHtml(title: string, rows: LineRow[], balance: number, monthName: string, year: string) {
-    const linesTotal = rows.reduce((s, l) => s + (l.total_price || 0), 0);
-    const total = linesTotal + balance;
-    return `
-      <div style="font-family: Arial, sans-serif; direction: rtl; color: #1e293b; background: #ffffff; padding: 30px; width: 780px;">
-        <div style="text-align:center; margin-bottom:24px; border-bottom:2px solid #1e40af; padding-bottom:16px;">
-          <h1 style="font-size:22px; color:#1e40af; margin-bottom:6px; font-weight:bold;">كشف حساب ${title}</h1>
-          <p style="font-size:14px; color:#64748b;">عن شهر ${monthName} ${year}</p>
-        </div>
-        <div style="display:flex; gap:16px; margin-bottom:20px;">
-          <div style="flex:1; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:10px; padding:14px; text-align:center;">
-            <div style="font-size:11px; color:#64748b; margin-bottom:6px;">إجمالي الخطوط</div>
-            <div style="font-size:22px; font-weight:bold; color:#1e40af;">${rows.length}</div>
-            <div style="font-size:11px; color:#94a3b8; margin-top:2px;">خط</div>
-          </div>
-          <div style="flex:1; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:10px; padding:14px; text-align:center;">
-            <div style="font-size:11px; color:#64748b; margin-bottom:6px;">إجمالي المبلغ (شامل المتبقي)</div>
-            <div style="font-size:22px; font-weight:bold; color:#1e40af;">${total.toLocaleString()}</div>
-            <div style="font-size:11px; color:#94a3b8; margin-top:2px;">جنيه</div>
-          </div>
-        </div>
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
+  // ─── HTML كشف واحد — خط أكبر ───────────────────────────────
+ const ROWS_PER_PAGE = 25;
+
+// ─── HTML لصفحة واحدة (مجموعة من الصفوف بس) ────────────────
+function buildStatementPageHtml(
+  title: string,
+  pageRows: LineRow[],
+  pageNum: number,
+  totalPages: number,
+  monthName: string,
+  year: string,
+  isLastPage: boolean,
+  balance: number,
+  grandTotal: number,
+  grandCount: number
+) {
+  return `
+    <div style="font-family: Arial, sans-serif; direction: rtl; color: #1e293b; background: #ffffff; padding: 30px; width: 780px;">
+      <div style="text-align:center; margin-bottom:20px; border-bottom:2px solid #1e40af; padding-bottom:14px;">
+        <h1 style="font-size:28px; color:#1e40af; margin-bottom:4px; font-weight:bold;">كشف حساب ${title}</h1>
+        <p style="font-size:15px; color:#64748b;">عن شهر ${monthName} ${year} — صفحة ${pageNum} من ${totalPages}</p>
+      </div>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="width:40px; background:#1e40af; color:white; padding:9px 8px; text-align:right; font-size:18px;">#</th>
+            <th style="background:#1e40af; color:white; padding:9px 8px; text-align:right; font-size:18px;">رقم الخط</th>
+            <th style="background:#1e40af; color:white; padding:9px 8px; text-align:right; font-size:18px;">اسم العميل</th>
+            <th style="background:#1e40af; color:white; padding:9px 8px; text-align:right; font-size:18px;">ملاحظات التقرير</th>
+            <th style="width:120px; background:#1e40af; color:white; padding:9px 8px; text-align:right; font-size:18px;">المبلغ المسدد</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${pageRows.map((line, i) => `
             <tr>
-              <th style="width:40px; background:#1e40af; color:white; padding:10px 8px; text-align:right; font-size:12px;">#</th>
-              <th style="background:#1e40af; color:white; padding:10px 8px; text-align:right; font-size:12px;">رقم الخط</th>
-              <th style="background:#1e40af; color:white; padding:10px 8px; text-align:right; font-size:12px;">اسم العميل</th>
-              <th style="background:#1e40af; color:white; padding:10px 8px; text-align:right; font-size:12px;">ملاحظات التقرير</th>
-              <th style="width:120px; background:#1e40af; color:white; padding:10px 8px; text-align:right; font-size:12px;">إجمالي الفاتورة</th>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${(pageNum - 1) * ROWS_PER_PAGE + i + 1}</td>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.number}</td>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.client_name}</td>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.report_note}</td>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.total_price.toLocaleString()} جنيه</td>
             </tr>
-          </thead>
-          <tbody>
-            ${rows.map((line, i) => `
-              <tr>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${i + 1}</td>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.number}</td>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.client_name}</td>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.report_note}</td>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; ${i % 2 === 1 ? "background:#f8fafc;" : ""}">${line.total_price.toLocaleString()} جنيه</td>
-              </tr>
-            `).join("")}
-            ${balance > 0 ? `
-              <tr>
-                <td colspan="4" style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; color:#b45309; font-weight:bold;">متبقي من شهر ${prevMonthLabel}</td>
-                <td style="padding:9px 8px; border-bottom:1px solid #e2e8f0; font-size:12px; color:#b45309; font-weight:bold;">${balance.toLocaleString()} جنيه</td>
-              </tr>
-            ` : ""}
-          </tbody>
+          `).join("")}
+          ${isLastPage && balance > 0 ? `
+            <tr>
+              <td colspan="4" style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; color:#b45309; font-weight:bold;">متبقي من الشهر السابق</td>
+              <td style="padding:8px; border-bottom:1px solid #e2e8f0; font-size:18px; color:#b45309; font-weight:bold;">${balance.toLocaleString()} جنيه</td>
+            </tr>
+          ` : ""}
+        </tbody>
+        ${isLastPage ? `
           <tfoot>
             <tr>
-              <td colspan="2" style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:12px;">الإجمالي</td>
-              <td style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:12px;">${rows.length} خط</td>
+              <td colspan="2" style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:18px;">الإجمالي الكلي</td>
+              <td style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:18px;">${grandCount} خط</td>
               <td style="background:#eff6ff; border-top:2px solid #1e40af; padding:9px 8px;"></td>
-              <td style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:12px;">${total.toLocaleString()} جنيه</td>
+              <td style="background:#eff6ff; color:#1e40af; font-weight:bold; border-top:2px solid #1e40af; padding:9px 8px; font-size:18px;">${grandTotal.toLocaleString()} جنيه</td>
             </tr>
           </tfoot>
-        </table>
-        <div style="margin-top:24px; text-align:center; font-size:11px; color:#94a3b8; border-top:1px solid #e2e8f0; padding-top:12px;">
+        ` : ""}
+      </table>
+      ${isLastPage ? `
+        <div style="margin-top:20px; text-align:center; font-size:11px; color:#94a3b8; border-top:1px solid #e2e8f0; padding-top:10px;">
           تم إنشاء هذا الكشف بتاريخ ${new Date().toLocaleDateString("ar-EG")}
         </div>
-      </div>
-    `;
-  }
+      ` : ""}
+    </div>
+  `;
+}
 
-  async function downloadSinglePdf(title: string, rows: LineRow[], balance: number, monthName: string, year: string) {
-    if (!pdfCaptureRef.current) return;
+// ─── تحميل PDF بصفحات ثابتة (20 سجل لكل صفحة) ──────────────
+async function downloadSinglePdf(title: string, rows: LineRow[], balance: number, monthName: string, year: string) {
+  if (!pdfCaptureRef.current) return;
 
-    pdfCaptureRef.current.innerHTML = buildStatementHtml(title, rows, balance, monthName, year);
-    await new Promise((r) => setTimeout(r, 100));
+  const html2canvas = (await import("html2canvas-pro")).default;
+  const { jsPDF } = await import("jspdf");
 
-    const html2canvas = (await import("html2canvas-pro")).default;
-    const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const marginTopMm = 6;
+  const marginBottomMm = 6;
+  const usableWidth = pageWidth - 20; // هامش يمين وشمال بسيط
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
+  const grandTotal = rows.reduce((s, l) => s + l.total_price, 0) + balance;
+  const grandCount = rows.length;
+
+  for (let p = 0; p < totalPages; p++) {
+    const pageRows = rows.slice(p * ROWS_PER_PAGE, (p + 1) * ROWS_PER_PAGE);
+    const isLastPage = p === totalPages - 1;
+
+    pdfCaptureRef.current.innerHTML = buildStatementPageHtml(
+      title, pageRows, p + 1, totalPages, monthName, year, isLastPage, balance, grandTotal, grandCount
+    );
+    await new Promise((r) => setTimeout(r, 80));
 
     const canvas = await html2canvas(pdfCaptureRef.current, {
       backgroundColor: "#ffffff",
@@ -324,33 +370,18 @@ export default function KashfPage() {
       useCORS: true,
     });
 
+    const imgHeightMm = (canvas.height * usableWidth) / canvas.width;
+    const finalHeight = Math.min(imgHeightMm, pageHeight - marginTopMm - marginBottomMm);
+
+    if (p > 0) pdf.addPage();
     const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    if (imgHeight <= pageHeight) {
-      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
-    } else {
-      let heightLeft = imgHeight;
-      let position = 0;
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-    }
-
-    const safeTitle = title.replace(/[\\/:*?"<>|]/g, "-");
-    pdf.save(`كشف-${safeTitle}-${year}-${monthName}.pdf`);
-    pdfCaptureRef.current.innerHTML = "";
+    pdf.addImage(imgData, "PNG", 10, marginTopMm, usableWidth, finalHeight);
   }
+
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, "-");
+  pdf.save(`كشف-${safeTitle}-${year}-${monthName}.pdf`);
+  pdfCaptureRef.current.innerHTML = "";
+}
 
   async function downloadAllPdfs() {
     const [year, month] = filterMonth.split("-");
@@ -389,17 +420,17 @@ export default function KashfPage() {
         "رقم الخط": line.number,
         "اسم العميل": line.client_name,
         "ملاحظات التقرير": line.report_note,
-        "إجمالي الفاتورة": line.total_price,
+        "المبلغ المسدد": line.total_price,
       }));
       if (balance > 0) {
         rowsOut.push({
           "#": "", "رقم الخط": "", "اسم العميل": `متبقي من شهر ${prevMonthLabel}`,
-          "ملاحظات التقرير": "", "إجمالي الفاتورة": balance,
+          "ملاحظات التقرير": "", "المبلغ المسدد": balance,
         });
       }
       rowsOut.push({
         "#": "", "رقم الخط": "", "اسم العميل": "الإجمالي",
-        "ملاحظات التقرير": `${rows.length} خط`, "إجمالي الفاتورة": linesTotal + balance,
+        "ملاحظات التقرير": `${rows.length} خط`, "المبلغ المسدد": linesTotal + balance,
       });
       return rowsOut;
     }
@@ -432,7 +463,7 @@ export default function KashfPage() {
           </span>
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-slate-900">كشوفات المنافذ والهيئات</h1>
-            <p className="text-sm text-slate-500 mt-0.5">استعراض وطباعة كشف حساب لكل منفذ أو جروب كامل</p>
+            <p className="text-sm text-slate-500 mt-0.5">استعراض وطباعة كشف السدادات لكل منفذ أو جروب كامل</p>
           </div>
         </div>
 
@@ -548,7 +579,7 @@ export default function KashfPage() {
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 mb-1.5">الشهر (يحدد المتبقي المضاف كمان)</label>
+              <label className="block text-xs text-slate-500 mb-1.5">الشهر (بيحدد المسددين والمتبقي)</label>
               <div className="relative">
                 <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input type="month" value={filterMonth}
@@ -571,7 +602,7 @@ export default function KashfPage() {
           <>
             <div className="grid grid-cols-3 gap-4 mb-5">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">إجمالي الخطوط</p>
+                <p className="text-xs text-slate-400 mb-1">عدد المسددين</p>
                 <p className="text-3xl font-bold text-blue-600">{totalLines}</p>
                 <p className="text-xs text-slate-400 mt-1">خط</p>
               </div>
@@ -581,7 +612,7 @@ export default function KashfPage() {
                 <p className="text-xs text-slate-400 mt-1">جنيه</p>
               </div>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-center">
-                <p className="text-xs text-slate-400 mb-1">إجمالي المبلغ (شامل المتبقي)</p>
+                <p className="text-xs text-slate-400 mb-1">إجمالي المحصل (شامل المتبقي)</p>
                 <p className="text-3xl font-bold text-green-600">{totalAmount.toLocaleString()}</p>
                 <p className="text-xs text-slate-400 mt-1">جنيه</p>
               </div>
@@ -620,19 +651,19 @@ export default function KashfPage() {
                           كشف حساب: {outlet.name}
                         </h2>
                         <span className="text-xs text-slate-500">
-                          {outlet.lines.length} خط
+                          {outlet.lines.length} خط مسدد
                           {balance > 0 && <span className="text-amber-600 font-medium"> + متبقي {balance.toLocaleString()}</span>}
                           {" — "}إجمالي {outletTotal.toLocaleString()} جنيه
                         </span>
                       </div>
-                      <table className="w-full text-sm">
-                        <thead className="bg-slate-50 text-slate-500 text-xs">
+                      <table className="w-full text-base">
+                        <thead className="bg-slate-50 text-slate-500 text-sm">
                           <tr>
                             <th className="p-3 text-right font-medium w-10">#</th>
                             <th className="p-3 text-right font-medium">رقم الخط</th>
                             <th className="p-3 text-right font-medium">اسم العميل</th>
                             <th className="p-3 text-right font-medium">ملاحظات التقرير</th>
-                            <th className="p-3 text-right font-medium">إجمالي الفاتورة</th>
+                            <th className="p-3 text-right font-medium">المبلغ المسدد</th>
                           </tr>
                         </thead>
                         <tbody className="text-slate-700">
@@ -668,7 +699,7 @@ export default function KashfPage() {
                 })}
                 {linesByOutlet.length === 0 && (
                   <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-400">
-                    لا توجد خطوط حالياً لهذا الجروب
+                    لا يوجد مسددين لهذا الجروب في الشهر ده
                   </div>
                 )}
               </div>
@@ -682,14 +713,14 @@ export default function KashfPage() {
                     {filterMonth.split("-")[1]} / {filterMonth.split("-")[0]}
                   </p>
                 </div>
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-slate-500 text-xs">
+                <table className="w-full text-base">
+                  <thead className="bg-slate-50 text-slate-500 text-sm">
                     <tr>
                       <th className="p-3 text-right font-medium w-10">#</th>
                       <th className="p-3 text-right font-medium">رقم الخط</th>
                       <th className="p-3 text-right font-medium">اسم العميل</th>
                       <th className="p-3 text-right font-medium">ملاحظات التقرير</th>
-                      <th className="p-3 text-right font-medium">إجمالي الفاتورة</th>
+                      <th className="p-3 text-right font-medium">المبلغ المسدد</th>
                     </tr>
                   </thead>
                   <tbody className="text-slate-700">
@@ -713,7 +744,7 @@ export default function KashfPage() {
                     {lines.length === 0 && (
                       <tr>
                         <td colSpan={5} className="p-10 text-center text-slate-400">
-                          لا توجد خطوط حالياً لهذا المنفذ
+                          لا يوجد مسددين لهذا المنفذ في الشهر ده
                         </td>
                       </tr>
                     )}
