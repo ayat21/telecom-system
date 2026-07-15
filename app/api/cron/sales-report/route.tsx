@@ -59,8 +59,8 @@ async function getFullSalesData() {
   const totalLines = totalLinesCount || 0;
   const unsold = unsoldCount || 0;
 
-  const salesRate =  unsold > 0 ? (salesCount / (salesCount + unsold)) * 100 : "0.00";
-  const migrationRate = totalLines > 0 ? (migrationCount / totalLines) * 100 : "0.00";
+  const salesRate =  unsold > 0 ? ((salesCount / (salesCount + unsold)) * 100).toFixed(2) : 0;
+  const migrationRate = totalLines > 0 ? ((migrationCount / totalLines) * 100).toFixed(2) : 0;
   const periodTotal = salesCount + migrationCount;
 
   // ─── توزيع المبيعات حسب الشبكة (من المبيعات بس) ───
