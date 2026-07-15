@@ -21,19 +21,16 @@ function getSupabase() {
 
 async function getSalesData() {
   const supabase = getSupabase();
-  const today = new Date().toISOString().slice(0, 10);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("lines")
-    .select("department_id")
-    .gte("customer_date_real", START_DATE)
-    .lte("customer_date_real", today)
-    .or("is_deleted.is.null,is_deleted.eq.false");
+    .select("department_id, customer_date_real, is_deleted")
+    .limit(10);
 
-  const rows = data || [];
-  const migration = rows.filter((l: any) => l.department_id === MIGRATION_DEPT_ID).length;
-  const sales = rows.filter((l: any) => l.department_id && l.department_id !== MIGRATION_DEPT_ID).length;
-  return { sales, migration, total: sales + migration };
+  return {
+    error,
+    rows: data,
+  };
 }
 async function loadArabicFontBase64(): Promise<string> {
   const res = await fetch(
@@ -145,14 +142,8 @@ export async function GET(req: NextRequest) {
   }
 
  try {
-  const { sales, migration, total } = await getSalesData();
-
-  return NextResponse.json({
-    sales,
-    migration,
-    total,
-    startDate: START_DATE,
-  });
+const data = await getSalesData();
+return NextResponse.json(data);
 } catch (err) {
   return NextResponse.json(
     {
