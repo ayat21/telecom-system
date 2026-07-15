@@ -82,18 +82,33 @@ async function getCollectionData(): Promise<DeptStat[]> {
   return stats;
 }
 
-async function loadArabicFontBase64(): Promise<string> {
-  const res = await fetch(
-    "https://fonts.gstatic.com/s/notosansarabic/v18/nwpxtLGrOAZMl5nJ_wfgRg3DrWFZWsnVBJ_sS6tlqHHFlhQ5l3sQWIHPqzCfyAe0.ttf"
+async function loadArabicFontBase64(): Promise<{ base64: string; format: string }> {
+  const cssRes = await fetch(
+    "https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@700&display=swap",
+    {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    }
   );
-  const buffer = await res.arrayBuffer();
+  const css = await cssRes.text();
+  const match = css.match(/src:\s*url\(([^)]+)\)\s*format\('(woff2|truetype)'\)/);
+  if (!match) throw new Error("مقدرش ألاقي رابط الخط جوه رد جوجل فونتس");
+
+  const fontUrl = match[1];
+  const format = match[2];
+
+  const fontRes = await fetch(fontUrl);
+  const buffer = await fontRes.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = "";
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+
+  return { base64: btoa(binary), format };
 }
 
-function buildHtml(stats: DeptStat[], fontBase64: string) {
+function buildHtml(stats: DeptStat[],  font: { base64: string; format: string }) {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
 
@@ -115,7 +130,7 @@ function buildHtml(stats: DeptStat[], fontBase64: string) {
       <style>
         @font-face {
           font-family: 'ArFont';
-          src: url(data:font/truetype;charset=utf-8;base64,${fontBase64}) format('truetype');
+          src: url(data:font/${font.format === "woff2" ? "woff2" : "truetype"};charset=utf-8;base64,${font.base64}) format('${font.format}');
         }
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
@@ -188,8 +203,8 @@ export async function GET(req: NextRequest) {
   try {
     const stats = await getCollectionData();
     const height = 220 + Math.ceil(stats.length / 3) * 150;
-    const fontBase64 = await loadArabicFontBase64();
-    const html = buildHtml(stats, fontBase64);
+   const fontBase64 = await loadArabicFontBase64();
+const html = buildHtml(sales, migration, total, fontBase64);
     const imageBuffer = await renderImage(html, height);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_COLLECTION!,
