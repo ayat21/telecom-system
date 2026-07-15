@@ -144,20 +144,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
   }
 
-  try {
-    const { sales, migration, total } = await getSalesData();
+ try {
+  const { sales, migration, total } = await getSalesData();
 
-return NextResponse.json({
-  sales,
-  migration,
-  total,
-  startDate: START_DATE,
-});
-    return NextResponse.json({ success: true, telegram: result });
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, error: err instanceof Error ? err.message : "خطأ غير متوقع" },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({
+    sales,
+    migration,
+    total,
+    startDate: START_DATE,
+  });
+} catch (err) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: err instanceof Error ? err.message : "خطأ غير متوقع",
+    },
+    { status: 500 }
+  );
+}
 }
