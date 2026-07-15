@@ -347,10 +347,10 @@ async function renderImage(html: string, height: number): Promise<Buffer> {
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1400, height });
+    await page.setViewport({ width: 1400, height: 2200 });
     await page.setContent(html, { waitUntil: "networkidle0" });
-    const bodyHeight = await page.evaluate(() => document.body.scrollHeight);
-    await page.setViewport({ width: 1400, height: bodyHeight });
+    // استني ثانية إضافية عشان الخطوط والتصميم يستقروا تماماً قبل التصوير
+    await new Promise((r) => setTimeout(r, 500));
     const screenshot = await page.screenshot({ type: "png", fullPage: true });
     return screenshot as Buffer;
   } finally {
