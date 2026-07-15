@@ -21,12 +21,18 @@ function getSupabase() {
 
 async function getSalesData() {
   const supabase = getSupabase();
+    const today = new Date().toISOString().slice(0, 10);
 
-  const { data, error } = await supabase
-    .from("lines")
-    .select("department_id, customer_date_real, is_deleted")
-    .limit(10);
+ const { data, error } = await supabase
+  .from("lines")
+  .select("department_id")
+  .gte("customer_date_real", START_DATE)
+  .lte("customer_date_real", today)
+  .or("is_deleted.is.null,is_deleted.eq.false");
 
+if (error) {
+  throw error;
+}
   return {
     error,
     rows: data,
