@@ -203,8 +203,8 @@ export async function GET(req: NextRequest) {
   try {
     const stats = await getCollectionData();
     const height = 220 + Math.ceil(stats.length / 3) * 150;
-   const fontBase64 = await loadArabicFontBase64();
-const html = buildHtml(sales, migration, total, fontBase64);
+    const fontBase64 = await loadArabicFontBase64();
+    const html = buildHtml(stats, fontBase64);
     const imageBuffer = await renderImage(html, height);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_COLLECTION!,
