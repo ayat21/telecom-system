@@ -1,10 +1,13 @@
-import { ImageResponse } from "next/og";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import chromium from "@sparticuz/chromium-min";
+import puppeteer from "puppeteer-core";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
+export const maxDuration = 30;
+chromium.setGraphicsMode = false;
 
-// ─── نفس الأقسام المستبعدة في شاشة المدفوعات ───
+
 const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
 
 function getSupabase() {
@@ -14,13 +17,6 @@ function getSupabase() {
   );
 }
 
-async function loadArabicFont(): Promise<ArrayBuffer> {
-  const res = await fetch(
-    "https://fonts.gstatic.com/s/cairo/v28/SLXgc1nY6HkvangtZmpQdkhzfH5lkSs2SgRjCAGMQ1z0hOA-a1M.ttf"
-  );
-  return await res.arrayBuffer();
-}
-
 interface DeptStat {
   name: string;
   required: number;
@@ -28,14 +24,10 @@ interface DeptStat {
   rate: number;
 }
 
-// ─── نفس منطق شاشة المدفوعات بالظبط (loadScopedLines + loadStatsAndScope) لكل قسم ───
-async function buildCollectionImage(): Promise<ArrayBuffer> {
+async function getCollectionData(): Promise<DeptStat[]> {
   const supabase = getSupabase();
-  const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // 1) هاتي كل الخطوط النشطة المرتبطة بقسم (بدون الأقسام المستبعدة)، مع اسم القسم والسعر
-  const deptLineNumbers = new Map<string, Set<string>>(); // deptName -> line numbers
+  const deptLineNumbers = new Map<string, Set<string>>();
   const deptRequired = new Map<string, number>();
 
   let offset = 0;
@@ -63,7 +55,6 @@ async function buildCollectionImage(): Promise<ArrayBuffer> {
     offset += 1000;
   }
 
-  // 2) هاتي كل السدادات (كل الوقت، زي منطق شاشة المدفوعات) واجمعيها لكل رقم خط
   const paidAmountByLine = new Map<string, number>();
   let pOffset = 0;
   while (true) {
@@ -79,82 +70,87 @@ async function buildCollectionImage(): Promise<ArrayBuffer> {
     pOffset += 1000;
   }
 
-  // 3) اجمعي المحصل لكل قسم من أرقامه بس
   const stats: DeptStat[] = [];
   deptLineNumbers.forEach((numbers, deptName) => {
     let collected = 0;
-    numbers.forEach((num) => {
-      collected += paidAmountByLine.get(num) || 0;
-    });
+    numbers.forEach((num) => { collected += paidAmountByLine.get(num) || 0; });
     const required = deptRequired.get(deptName) || 0;
     const rate = required > 0 ? Math.round((collected / required) * 100) : 0;
     stats.push({ name: deptName, required, collected, rate });
   });
 
   stats.sort((a, b) => b.required - a.required);
-
-  const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
-  const fontData = await loadArabicFont();
-
-  const height = 300 + Math.ceil(stats.length / 3) * 150;
-
-  const image = new ImageResponse(
-    (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          width: "900px",
-          height: `${height}px`,
-          background: "linear-gradient(135deg, #059669, #047857)",
-          padding: "40px",
-          fontFamily: "Cairo",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", marginBottom: "24px" }}>
-          <div style={{ color: "#d1fae5", fontSize: 20 }}>{dateLabel}</div>
-          <div style={{ color: "#ffffff", fontSize: 38, fontWeight: 700, marginTop: 4 }}>
-            تقرير نسبة السداد لكل قسم
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
-          {stats.map((s) => (
-            <div
-              key={s.name}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                background: "rgba(255,255,255,0.15)",
-                borderRadius: "20px",
-                width: "270px",
-                padding: "18px",
-              }}
-            >
-              <div style={{ color: "#ffffff", fontSize: 22, fontWeight: 700 }}>{s.name}</div>
-              <div style={{ display: "flex", alignItems: "baseline", marginTop: 8 }}>
-                <div style={{ color: "#ffffff", fontSize: 44, fontWeight: 700 }}>{s.rate}</div>
-                <div style={{ color: "#d1fae5", fontSize: 20, marginRight: 4 }}>%</div>
-              </div>
-              <div style={{ color: "#d1fae5", fontSize: 15, marginTop: 6 }}>
-                محصل {s.collected.toLocaleString()} / مطلوب {s.required.toLocaleString()}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    ),
-    {
-      width: 900,
-      height,
-      fonts: [{ name: "Cairo", data: fontData, style: "normal", weight: 400 }],
-    }
-  );
-
-  return await image.arrayBuffer();
+  return stats;
 }
 
-async function sendTelegramPhoto(chatId: string, imageBuffer: ArrayBuffer, caption: string) {
+function buildHtml(stats: DeptStat[]) {
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
+  const rows = Math.ceil(stats.length / 3);
+  const height = 220 + rows * 150;
+
+  const cardsHtml = stats.map((s) => `
+    <div class="card">
+      <div class="dept-name">${s.name}</div>
+      <div class="rate-row">
+        <span class="rate">${s.rate}</span><span class="percent">%</span>
+      </div>
+      <div class="detail">محصل ${s.collected.toLocaleString()} / مطلوب ${s.required.toLocaleString()}</div>
+    </div>
+  `).join("");
+
+  return `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="UTF-8" />
+      <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+          width: 900px; height: ${height}px;
+          font-family: Arial, Tahoma, sans-serif;
+          background: linear-gradient(135deg, #059669, #047857);
+          padding: 40px; color: white; direction: rtl;
+        }
+        .sub { color:#d1fae5; font-size:20px; }
+        .title { color:white; font-size:38px; font-weight:bold; margin-top:4px; margin-bottom:24px; }
+        .grid { display:flex; flex-wrap:wrap; gap:16px; }
+        .card { background:rgba(255,255,255,0.15); border-radius:20px; padding:18px; width:270px; }
+        .dept-name { font-size:22px; font-weight:bold; }
+        .rate-row { display:flex; align-items:baseline; margin-top:8px; }
+        .rate { font-size:44px; font-weight:bold; }
+        .percent { color:#d1fae5; font-size:20px; margin-right:4px; }
+        .detail { color:#d1fae5; font-size:15px; margin-top:6px; }
+      </style>
+    </head>
+    <body>
+      <div class="sub">${dateLabel}</div>
+      <div class="title">تقرير نسبة السداد لكل قسم</div>
+      <div class="grid">${cardsHtml}</div>
+    </body>
+    </html>
+  `;
+}
+
+async function renderImage(html: string, height: number): Promise<Buffer> {
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    executablePath: await chromium.executablePath(),
+    headless: true,
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 900, height });
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const screenshot = await page.screenshot({ type: "png" });
+    return screenshot as Buffer;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function sendTelegramPhoto(chatId: string, imageBuffer: Buffer, caption: string) {
   const token = process.env.TELEGRAM_BOT_TOKEN!;
   const formData = new FormData();
   formData.append("chat_id", chatId);
@@ -175,7 +171,10 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const imageBuffer = await buildCollectionImage();
+    const stats = await getCollectionData();
+    const height = 220 + Math.ceil(stats.length / 3) * 150;
+    const html = buildHtml(stats);
+    const imageBuffer = await renderImage(html, height);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_COLLECTION!,
       imageBuffer,

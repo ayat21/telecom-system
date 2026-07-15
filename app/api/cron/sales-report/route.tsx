@@ -1,8 +1,11 @@
-import { ImageResponse } from "next/og";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import chromium from "@sparticuz/chromium-min";
+import puppeteer from "puppeteer-core";
 
-export const runtime = "edge";
+chromium.setGraphicsMode = false;
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const MIGRATION_DEPT_ID = 10;
 
@@ -16,15 +19,7 @@ function getSupabase() {
   );
 }
 
-async function loadArabicFont(): Promise<ArrayBuffer> {
-  const res = await fetch(
-    "https://fonts.gstatic.com/s/cairo/v28/SLXgc1nY6HkvangtZmpQdkhzfH5lkSs2SgRjCAGMQ1z0hOA-a1M.ttf"
-  );
-  return await res.arrayBuffer();
-}
-
-// ─── نفس منطق شاشة "تقرير المبيعات" بالظبط (department_id) ───
-async function buildSalesImage(): Promise<ArrayBuffer> {
+async function getSalesData() {
   const supabase = getSupabase();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -38,97 +33,81 @@ async function buildSalesImage(): Promise<ArrayBuffer> {
   const rows = data || [];
   const migration = rows.filter((l: any) => l.department_id === MIGRATION_DEPT_ID).length;
   const sales = rows.filter((l: any) => l.department_id && l.department_id !== MIGRATION_DEPT_ID).length;
-  const total = sales + migration;
+  return { sales, migration, total: sales + migration };
+}
 
+function buildHtml(sales: number, migration: number, total: number) {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
   const [sy, sm, sd] = START_DATE.split("-");
   const startLabel = `${sd}/${sm}/${sy}`;
 
-  const fontData = await loadArabicFont();
-
-  const image = new ImageResponse(
-    (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          width: "800px",
-          height: "500px",
-          background: "linear-gradient(135deg, #2563eb, #1e40af)",
-          padding: "40px",
-          fontFamily: "Cairo",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", marginBottom: "24px" }}>
-          <div style={{ color: "#dbeafe", fontSize: 20 }}>
-            من {startLabel} — تقرير بتاريخ {dateLabel}
-          </div>
-          <div style={{ color: "#ffffff", fontSize: 38, fontWeight: 700, marginTop: 4 }}>
-            تقرير المبيعات
-          </div>
+  return `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="UTF-8" />
+      <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+          width: 800px; height: 500px;
+          font-family: Arial, Tahoma, sans-serif;
+          background: linear-gradient(135deg, #2563eb, #1e40af);
+          padding: 40px; color: white; direction: rtl;
+        }
+        .sub { color:#dbeafe; font-size:20px; }
+        .title { color:white; font-size:38px; font-weight:bold; margin-top:4px; }
+        .row { display:flex; gap:20px; margin-top:26px; }
+        .card { flex:1; background:rgba(255,255,255,0.15); border-radius:24px; padding:24px; text-align:center; }
+        .card.total { background:rgba(255,255,255,0.25); }
+        .label { font-size:22px; }
+        .value { font-size:62px; font-weight:bold; margin-top:8px; }
+        .sales-label { color:#bbf7d0; }
+        .migration-label { color:#fed7aa; }
+        .total-label { color:#e0e7ff; }
+      </style>
+    </head>
+    <body>
+      <div class="sub">من ${startLabel} — تقرير بتاريخ ${dateLabel}</div>
+      <div class="title">تقرير المبيعات</div>
+      <div class="row">
+        <div class="card">
+          <div class="label sales-label">مبيعات</div>
+          <div class="value">${sales}</div>
         </div>
-
-        <div style={{ display: "flex", gap: "20px", flex: 1 }}>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "center",
-              background: "rgba(255,255,255,0.15)",
-              borderRadius: "24px",
-              flex: 1,
-              padding: "20px",
-            }}
-          >
-            <div style={{ color: "#bbf7d0", fontSize: 22 }}>مبيعات</div>
-            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{sales}</div>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "center",
-              background: "rgba(255,255,255,0.15)",
-              borderRadius: "24px",
-              flex: 1,
-              padding: "20px",
-            }}
-          >
-            <div style={{ color: "#fed7aa", fontSize: 22 }}>مايجريشن</div>
-            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{migration}</div>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "center",
-              background: "rgba(255,255,255,0.25)",
-              borderRadius: "24px",
-              flex: 1,
-              padding: "20px",
-            }}
-          >
-            <div style={{ color: "#e0e7ff", fontSize: 22 }}>الإجمالي</div>
-            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{total}</div>
-          </div>
+        <div class="card">
+          <div class="label migration-label">مايجريشن</div>
+          <div class="value">${migration}</div>
+        </div>
+        <div class="card total">
+          <div class="label total-label">الإجمالي</div>
+          <div class="value">${total}</div>
         </div>
       </div>
-    ),
-    {
-      width: 800,
-      height: 500,
-      fonts: [{ name: "Cairo", data: fontData, style: "normal", weight: 400 }],
-    }
-  );
-
-  return await image.arrayBuffer();
+    </body>
+    </html>
+  `;
 }
 
-async function sendTelegramPhoto(chatId: string, imageBuffer: ArrayBuffer, caption: string) {
+async function renderImage(html: string): Promise<Buffer> {
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    executablePath: await chromium.executablePath(),
+    headless: true,
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 800, height: 500 });
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const screenshot = await page.screenshot({ type: "png" });
+    return screenshot as Buffer;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function sendTelegramPhoto(chatId: string, imageBuffer: Buffer, caption: string) {
   const token = process.env.TELEGRAM_BOT_TOKEN!;
   const formData = new FormData();
   formData.append("chat_id", chatId);
@@ -149,7 +128,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const imageBuffer = await buildSalesImage();
+    const { sales, migration, total } = await getSalesData();
+    const html = buildHtml(sales, migration, total);
+    const imageBuffer = await renderImage(html);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_SALES!,
       imageBuffer,
