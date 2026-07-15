@@ -1,9 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import chromium from "@sparticuz/chromium-min";
+import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 
-chromium.setGraphicsMode = false;
 export const runtime = "nodejs";
 export const maxDuration = 30;
 

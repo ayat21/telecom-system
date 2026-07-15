@@ -1,11 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import chromium from "@sparticuz/chromium-min";
+import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
-chromium.setGraphicsMode = false;
 
 
 const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
