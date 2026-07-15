@@ -82,7 +82,18 @@ async function getCollectionData(): Promise<DeptStat[]> {
   return stats;
 }
 
-function buildHtml(stats: DeptStat[]) {
+async function loadArabicFontBase64(): Promise<string> {
+  const res = await fetch(
+    "https://fonts.gstatic.com/s/notosansarabic/v18/nwpxtLGrOAZMl5nJ_wfgRg3DrWFZWsnVBJ_sS6tlqHHFlhQ5l3sQWIHPqzCfyAe0.ttf"
+  );
+  const buffer = await res.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function buildHtml(stats: DeptStat[], fontBase64: string) {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
 
@@ -102,10 +113,14 @@ function buildHtml(stats: DeptStat[]) {
     <head>
       <meta charset="UTF-8" />
       <style>
+        @font-face {
+          font-family: 'ArFont';
+          src: url(data:font/truetype;charset=utf-8;base64,${fontBase64}) format('truetype');
+        }
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
           width: 900px;
-          font-family: Arial, Tahoma, sans-serif;
+          font-family: 'ArFont', Arial, sans-serif;
           background: linear-gradient(135deg, #059669, #047857);
           padding: 40px; color: white; direction: rtl;
         }
@@ -173,7 +188,8 @@ export async function GET(req: NextRequest) {
   try {
     const stats = await getCollectionData();
     const height = 220 + Math.ceil(stats.length / 3) * 150;
-    const html = buildHtml(stats);
+    const fontBase64 = await loadArabicFontBase64();
+    const html = buildHtml(stats, fontBase64);
     const imageBuffer = await renderImage(html, height);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_COLLECTION!,

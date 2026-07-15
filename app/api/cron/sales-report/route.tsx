@@ -1,3 +1,4 @@
+i
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import chromium from "@sparticuz/chromium";
@@ -10,7 +11,7 @@ export const maxDuration = 30;
 const MIGRATION_DEPT_ID = 10;
 
 // ─── غيّري التاريخ ده لأي تاريخ عايزة التقرير يبدأ منه ───
-const START_DATE = "2026-06-28";
+const START_DATE = "2026-01-01";
 
 function getSupabase() {
   return createClient(
@@ -21,23 +22,22 @@ function getSupabase() {
 
 async function getSalesData() {
   const supabase = getSupabase();
-    const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
 
- const { data, error } = await supabase
-  .from("lines")
-  .select("department_id")
-  .gte("customer_date_real", START_DATE)
-  .lte("customer_date_real", today)
-  .or("is_deleted.is.null,is_deleted.eq.false");
+  const { data } = await supabase
+    .from("lines")
+    .select("department_id")
+    .gte("customer_date_real", START_DATE)
+    .lte("customer_date_real", today)
+    .or("is_deleted.is.null,is_deleted.eq.false");
 
-if (error) {
-  throw error;
+  const rows = data || [];
+  const migration = rows.filter((l: any) => l.department_id === MIGRATION_DEPT_ID).length;
+  const sales = rows.filter((l: any) => l.department_id && l.department_id !== MIGRATION_DEPT_ID).length;
+  return { sales, migration, total: sales + migration };
 }
-  return {
-    error,
-    rows: data,
-  };
-}
+
+// ─── خط عربي مدمج داخل الـ HTML (Base64) عشان يظهر جوه المتصفح على السيرفر ───
 async function loadArabicFontBase64(): Promise<string> {
   const res = await fetch(
     "https://fonts.gstatic.com/s/notosansarabic/v18/nwpxtLGrOAZMl5nJ_wfgRg3DrWFZWsnVBJ_sS6tlqHHFlhQ5l3sQWIHPqzCfyAe0.ttf"
@@ -147,16 +147,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
   }
 
- try {
-const data = await getSalesData();
-return NextResponse.json(data);
-} catch (err) {
-  return NextResponse.json(
-    {
-      success: false,
-      error: err instanceof Error ? err.message : "خطأ غير متوقع",
-    },
-    { status: 500 }
-  );
-}
+  try {
+    const { sales, migration, total } = await getSalesData();
+    const fontBase64 = await loadArabicFontBase64();
+    const html = buildHtml(sales, migration, total, fontBase64);
+    const imageBuffer = await renderImage(html);
+    const result = await sendTelegramPhoto(
+      process.env.TELEGRAM_CHAT_ID_SALES!,
+      imageBuffer,
+      "📊 تقرير المبيعات"
+    );
+    return NextResponse.json({ success: true, telegram: result });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "خطأ غير متوقع" },
+      { status: 500 }
+    );
+  }
 }
