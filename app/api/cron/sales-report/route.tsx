@@ -6,6 +6,9 @@ export const runtime = "edge";
 
 const MIGRATION_DEPT_ID = 10;
 
+// ─── غيّري التاريخ ده لأي تاريخ عايزة التقرير يبدأ منه ───
+const START_DATE = "2026-01-01";
+
 function getSupabase() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,24 +16,36 @@ function getSupabase() {
   );
 }
 
+async function loadArabicFont(): Promise<ArrayBuffer> {
+  const res = await fetch(
+    "https://fonts.gstatic.com/s/cairo/v28/SLXgc1nY6HkvangtZmpQdkhzfH5lkSs2SgRjCAGMQ1z0hOA-a1M.ttf"
+  );
+  return await res.arrayBuffer();
+}
+
+// ─── نفس منطق شاشة "تقرير المبيعات" بالظبط (department_id) ───
 async function buildSalesImage(): Promise<ArrayBuffer> {
   const supabase = getSupabase();
+  const today = new Date().toISOString().slice(0, 10);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-
-  const { data: lines } = await supabase
+  const { data } = await supabase
     .from("lines")
     .select("department_id")
-    .eq("customer_date_real", todayStr)
+    .gte("customer_date_real", START_DATE)
+    .lte("customer_date_real", today)
     .or("is_deleted.is.null,is_deleted.eq.false");
 
-  const rows = lines || [];
+  const rows = data || [];
   const migration = rows.filter((l: any) => l.department_id === MIGRATION_DEPT_ID).length;
   const sales = rows.filter((l: any) => l.department_id && l.department_id !== MIGRATION_DEPT_ID).length;
   const total = sales + migration;
 
   const now = new Date();
   const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
+  const [sy, sm, sd] = START_DATE.split("-");
+  const startLabel = `${sd}/${sm}/${sy}`;
+
+  const fontData = await loadArabicFont();
 
   const image = new ImageResponse(
     (
@@ -42,13 +57,15 @@ async function buildSalesImage(): Promise<ArrayBuffer> {
           height: "500px",
           background: "linear-gradient(135deg, #2563eb, #1e40af)",
           padding: "40px",
-          fontFamily: "sans-serif",
+          fontFamily: "Cairo",
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", marginBottom: "30px" }}>
-          <div style={{ color: "#dbeafe", fontSize: 22 }}>{dateLabel}</div>
-          <div style={{ color: "#ffffff", fontSize: 40, fontWeight: 700, marginTop: 4 }}>
-            تقرير المبيعات اليومي
+        <div style={{ display: "flex", flexDirection: "column", marginBottom: "24px" }}>
+          <div style={{ color: "#dbeafe", fontSize: 20 }}>
+            من {startLabel} — تقرير بتاريخ {dateLabel}
+          </div>
+          <div style={{ color: "#ffffff", fontSize: 38, fontWeight: 700, marginTop: 4 }}>
+            تقرير المبيعات
           </div>
         </div>
 
@@ -66,7 +83,7 @@ async function buildSalesImage(): Promise<ArrayBuffer> {
             }}
           >
             <div style={{ color: "#bbf7d0", fontSize: 22 }}>مبيعات</div>
-            <div style={{ color: "#ffffff", fontSize: 64, fontWeight: 700 }}>{sales}</div>
+            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{sales}</div>
           </div>
           <div
             style={{
@@ -81,7 +98,7 @@ async function buildSalesImage(): Promise<ArrayBuffer> {
             }}
           >
             <div style={{ color: "#fed7aa", fontSize: 22 }}>مايجريشن</div>
-            <div style={{ color: "#ffffff", fontSize: 64, fontWeight: 700 }}>{migration}</div>
+            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{migration}</div>
           </div>
           <div
             style={{
@@ -96,12 +113,16 @@ async function buildSalesImage(): Promise<ArrayBuffer> {
             }}
           >
             <div style={{ color: "#e0e7ff", fontSize: 22 }}>الإجمالي</div>
-            <div style={{ color: "#ffffff", fontSize: 64, fontWeight: 700 }}>{total}</div>
+            <div style={{ color: "#ffffff", fontSize: 62, fontWeight: 700 }}>{total}</div>
           </div>
         </div>
       </div>
     ),
-    { width: 800, height: 500 }
+    {
+      width: 800,
+      height: 500,
+      fonts: [{ name: "Cairo", data: fontData, style: "normal", weight: 400 }],
+    }
   );
 
   return await image.arrayBuffer();
@@ -122,7 +143,6 @@ async function sendTelegramPhoto(chatId: string, imageBuffer: ArrayBuffer, capti
 }
 
 export async function GET(req: NextRequest) {
-  // تأمين الـ endpoint — Vercel Cron بيبعت الهيدر ده تلقائي لو CRON_SECRET متظبط
   const auth = req.headers.get("authorization");
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
@@ -133,7 +153,7 @@ export async function GET(req: NextRequest) {
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_SALES!,
       imageBuffer,
-      "📊 تقرير المبيعات اليومي"
+      "📊 تقرير المبيعات"
     );
     return NextResponse.json({ success: true, telegram: result });
   } catch (err) {
