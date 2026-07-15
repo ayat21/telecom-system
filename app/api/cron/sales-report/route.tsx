@@ -40,7 +40,6 @@ async function getFullSalesData() {
     .from("lines")
     .select("*", { count: "exact", head: true })
     .is("department_id", null)
-    .or("is_deleted.is.null,is_deleted.eq.false")
     .or("is_deactive.is.null,is_deactive.eq.false");
 
   // ─── خطوط الفترة المحددة (مبيعات + مايجريشن) مع تفاصيل ───
