@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sales-report",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/collection-report",
+      "schedule": "0 14 * * *"
+    }
+  ]
+}
