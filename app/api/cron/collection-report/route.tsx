@@ -2,10 +2,10 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
+import path from "node:path";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
-
 
 const EXCLUDED_DEPARTMENTS = ["SPOC", "فوري", "العهدة", "هيثم"];
 
@@ -85,8 +85,6 @@ async function getCollectionData(): Promise<DeptStat[]> {
 function buildHtml(stats: DeptStat[]) {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
-  const rows = Math.ceil(stats.length / 3);
-  const height = 220 + rows * 150;
 
   const cardsHtml = stats.map((s) => `
     <div class="card">
@@ -106,7 +104,7 @@ function buildHtml(stats: DeptStat[]) {
       <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
-          width: 900px; height: ${height}px;
+          width: 900px;
           font-family: Arial, Tahoma, sans-serif;
           background: linear-gradient(135deg, #059669, #047857);
           padding: 40px; color: white; direction: rtl;
@@ -132,9 +130,12 @@ function buildHtml(stats: DeptStat[]) {
 }
 
 async function renderImage(html: string, height: number): Promise<Buffer> {
+  const executablePath = await chromium.executablePath();
+  process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
+
   const browser = await puppeteer.launch({
     args: chromium.args,
-    executablePath: await chromium.executablePath(),
+    executablePath,
     headless: true,
   });
 
@@ -154,7 +155,8 @@ async function sendTelegramPhoto(chatId: string, imageBuffer: Buffer, caption: s
   const formData = new FormData();
   formData.append("chat_id", chatId);
   formData.append("caption", caption);
-formData.append("photo", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "report.png");
+  formData.append("photo", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "report.png");
+
   const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
     method: "POST",
     body: formData,

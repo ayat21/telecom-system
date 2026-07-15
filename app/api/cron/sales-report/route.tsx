@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
+import path from "node:path";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -89,9 +90,12 @@ function buildHtml(sales: number, migration: number, total: number) {
 }
 
 async function renderImage(html: string): Promise<Buffer> {
+  const executablePath = await chromium.executablePath();
+  process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
+
   const browser = await puppeteer.launch({
     args: chromium.args,
-    executablePath: await chromium.executablePath(),
+    executablePath,
     headless: true,
   });
 
@@ -111,7 +115,8 @@ async function sendTelegramPhoto(chatId: string, imageBuffer: Buffer, caption: s
   const formData = new FormData();
   formData.append("chat_id", chatId);
   formData.append("caption", caption);
-formData.append("photo", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "report.png");
+  formData.append("photo", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "report.png");
+
   const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
     method: "POST",
     body: formData,
