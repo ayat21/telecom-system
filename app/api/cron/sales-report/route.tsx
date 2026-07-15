@@ -146,14 +146,13 @@ export async function GET(req: NextRequest) {
 
   try {
     const { sales, migration, total } = await getSalesData();
-const fontBase64 = await loadArabicFontBase64();
-const html = buildHtml(sales, migration, total, fontBase64);
-    const imageBuffer = await renderImage(html);
-    const result = await sendTelegramPhoto(
-      process.env.TELEGRAM_CHAT_ID_SALES!,
-      imageBuffer,
-      "📊 تقرير المبيعات"
-    );
+
+return NextResponse.json({
+  sales,
+  migration,
+  total,
+  startDate: START_DATE,
+});
     return NextResponse.json({ success: true, telegram: result });
   } catch (err) {
     return NextResponse.json(
