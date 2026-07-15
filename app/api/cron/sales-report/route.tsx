@@ -335,7 +335,7 @@ function buildHtml(data: Awaited<ReturnType<typeof getFullSalesData>>, font: { b
   `;
 }
 
-async function renderImage(html: string, height: number): Promise<Buffer> {
+async function renderImage(html: string): Promise<Buffer> {
   const executablePath = await chromium.executablePath();
   process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
 
@@ -347,11 +347,18 @@ async function renderImage(html: string, height: number): Promise<Buffer> {
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1400, height: 2200 });
+    await page.setViewport({ width: 1400, height: 800 });
     await page.setContent(html, { waitUntil: "networkidle0" });
     // استني ثانية إضافية عشان الخطوط والتصميم يستقروا تماماً قبل التصوير
     await new Promise((r) => setTimeout(r, 500));
-    const screenshot = await page.screenshot({ type: "png", fullPage: true });
+
+    // مهم: لو الـ viewport أطول من المحتوى الفعلي وبعدين عملنا screenshot({fullPage:true})
+    // بيرجع صورة فاضية بيضاء (باج مؤكد في puppeteer/chromium هنا). الحل: نضبط ارتفاع
+    // الـ viewport على الارتفاع الحقيقي للمحتوى بعد التحميل، وناخد screenshot عادي بعدها.
+    const contentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    await page.setViewport({ width: 1400, height: contentHeight });
+
+    const screenshot = await page.screenshot({ type: "png" });
     return screenshot as Buffer;
   } finally {
     await browser.close();
@@ -397,7 +404,7 @@ export async function GET(req: NextRequest) {
     const data = await getFullSalesData();
     const font = await loadArabicFontBase64();
     const html = buildHtml(data, font);
-    const imageBuffer = await renderImage(html, 1100);
+    const imageBuffer = await renderImage(html);
 
     let result = await sendTelegramPhoto(process.env.TELEGRAM_CHAT_ID_SALES!, imageBuffer, "📊 تقرير المبيعات الكامل");
 

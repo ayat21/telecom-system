@@ -159,7 +159,7 @@ function buildHtml(stats: DeptStat[],  font: { base64: string; format: string })
   `;
 }
 
-async function renderImage(html: string, height: number): Promise<Buffer> {
+async function renderImage(html: string): Promise<Buffer> {
   const executablePath = await chromium.executablePath();
   process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
 
@@ -171,8 +171,15 @@ async function renderImage(html: string, height: number): Promise<Buffer> {
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 900, height });
+    await page.setViewport({ width: 900, height: 600 });
     await page.setContent(html, { waitUntil: "networkidle0" });
+    await new Promise((r) => setTimeout(r, 500));
+
+    // اضبطي ارتفاع الـ viewport على الارتفاع الحقيقي للمحتوى بعد التحميل بدل ما نتخمنه —
+    // فرق بين الاتنين وبعدين fullPage/resize كبير بيرجّع صورة فاضية بيضاء
+    const contentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    await page.setViewport({ width: 900, height: contentHeight });
+
     const screenshot = await page.screenshot({ type: "png" });
     return screenshot as Buffer;
   } finally {
@@ -202,10 +209,9 @@ export async function GET(req: NextRequest) {
 
   try {
     const stats = await getCollectionData();
-    const height = 220 + Math.ceil(stats.length / 3) * 150;
     const fontBase64 = await loadArabicFontBase64();
     const html = buildHtml(stats, fontBase64);
-    const imageBuffer = await renderImage(html, height);
+    const imageBuffer = await renderImage(html);
     const result = await sendTelegramPhoto(
       process.env.TELEGRAM_CHAT_ID_COLLECTION!,
       imageBuffer,
