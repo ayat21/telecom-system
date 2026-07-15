@@ -39,8 +39,7 @@ async function getFullSalesData() {
   const { count: unsoldCount } = await supabase
     .from("lines")
     .select("*", { count: "exact", head: true })
-    .is("department_id", null)
-    .or("is_deactive.is.null,is_deactive.eq.false");
+    .eq("is_deactive", true);
 
   // ─── خطوط الفترة المحددة (مبيعات + مايجريشن) مع تفاصيل ───
   const { data: periodLines } = await supabase
@@ -60,8 +59,8 @@ async function getFullSalesData() {
   const totalLines = totalLinesCount || 0;
   const unsold = unsoldCount || 0;
 
-  const salesRate = salesCount + unsold > 0 ? (salesCount / (salesCount + unsold)) * 100 : 0;
-  const migrationRate = totalLines > 0 ? (migrationCount / totalLines) * 100 : 0;
+  const salesRate =  unsold > 0 ? ((salesCount / (salesCount + unsold)) * 100).toFixed(2) : "0.00";
+  const migrationRate = totalLines > 0 ? ((migrationCount / totalLines) * 100).toFixed(2) : "0.00";
   const periodTotal = salesCount + migrationCount;
 
   // ─── توزيع المبيعات حسب الشبكة (من المبيعات بس) ───
@@ -305,7 +304,6 @@ function buildHtml(data: Awaited<ReturnType<typeof getFullSalesData>>, font: { b
             <tbody>
               <tr><td>🟢 مبيعات</td><td>${data.salesCount}</td><td>${data.salesRate.toFixed(2)}%</td></tr>
               <tr><td>🔵 مايجريشن</td><td>${data.migrationCount}</td><td>${data.migrationRate.toFixed(2)}%</td></tr>
-              <tr><td>🔴 الغير مباع</td><td>${data.unsold}</td><td>${((data.unsold / data.totalLines) * 100).toFixed(2)}%</td></tr>
               <tr style="background:#f8fafc;"><td><b>الإجمالي</b></td><td><b>${data.totalLines.toLocaleString()}</b></td><td><b>100%</b></td></tr>
             </tbody>
           </table>
