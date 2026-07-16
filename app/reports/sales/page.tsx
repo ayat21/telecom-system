@@ -467,7 +467,7 @@ const html2canvas = (await import("html2canvas-pro")).default;
                 {[
                   { label: "مبيعات", value: stats.sales, pct: salesPercent, color: "bg-green-500" },
                   { label: "مايجريشن", value: stats.migration, pct: migrationPercent, color: "bg-blue-500" },
-                  { label: "الغير مباع", value: stats.unsold, pct: unsoldPercent, color: "bg-red-500" },
+                
                 ].map((row) => (
                   <tr key={row.label} className="border-b border-slate-50">
                     <td className="py-2.5 flex items-center gap-2 text-slate-700">
@@ -480,7 +480,7 @@ const html2canvas = (await import("html2canvas-pro")).default;
                 ))}
                 <tr className="bg-blue-50/60 font-semibold text-blue-700">
                   <td className="py-2.5 px-2 rounded-r-lg">الإجمالي</td>
-                  <td className="py-2.5">{stats.totalLines}</td>
+                  <td className="py-2.5">{totalForSummary}</td>
                   <td className="py-2.5 px-2 rounded-l-lg">100%</td>
                 </tr>
               </tbody>

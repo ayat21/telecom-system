@@ -1005,7 +1005,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${
                 activityTab === "actions" ? "bg-white text-blue-700" : "text-white/85 hover:bg-white/10"
               }`}>
-              <ClipboardList className="w-4 h-4" /> الأكشنات
+              <ClipboardList className="w-4 h-4" /> الاجراءات
             </button>
           </div>
 

@@ -206,7 +206,7 @@ export default function TopNavbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () 
                 <Link href="/actions" onClick={() => setNotifOpen(false)}
                   className="block text-center text-xs font-medium text-blue-600 hover:bg-slate-50 py-2.5 border-t border-slate-100 transition">
                   <span className="inline-flex items-center gap-1">
-                    <ClipboardList className="w-3.5 h-3.5" /> عرض كل الأكشنات
+                    <ClipboardList className="w-3.5 h-3.5" />عرض كل الاجراءات
                   </span>
                 </Link>
               </div>

@@ -17,9 +17,9 @@ interface WidgetDef {
 }
 
 const WIDGETS: WidgetDef[] = [
-  { key: "due_today", label: "أكشنات اليوم", filter: "due_today", icon: CalendarClock, iconBg: "bg-blue-50", iconColor: "text-blue-600", valueColor: "text-blue-600" },
-  { key: "upcoming", label: "أكشنات قادمة", filter: "upcoming", icon: Calendar, iconBg: "bg-indigo-50", iconColor: "text-indigo-600", valueColor: "text-indigo-600" },
-  { key: "overdue", label: "أكشنات متأخرة", filter: "overdue", icon: AlertTriangle, iconBg: "bg-red-50", iconColor: "text-red-500", valueColor: "text-red-500" },
+  { key: "due_today", label: "اجراءات اليوم", filter: "due_today", icon: CalendarClock, iconBg: "bg-blue-50", iconColor: "text-blue-600", valueColor: "text-blue-600" },
+  { key: "upcoming", label: "اجراءات قادمة", filter: "upcoming", icon: Calendar, iconBg: "bg-indigo-50", iconColor: "text-indigo-600", valueColor: "text-indigo-600" },
+  { key: "overdue", label: "اجراءات متأخرة", filter: "overdue", icon: AlertTriangle, iconBg: "bg-red-50", iconColor: "text-red-500", valueColor: "text-red-500" },
   { key: "completed_today", label: "اكتملت اليوم", filter: "completed_today", icon: CheckCircle2, iconBg: "bg-green-50", iconColor: "text-green-600", valueColor: "text-green-600" },
   { key: "high_priority", label: "أولوية عالية", filter: "high_priority", icon: Flame, iconBg: "bg-orange-50", iconColor: "text-orange-600", valueColor: "text-orange-600" },
 ];

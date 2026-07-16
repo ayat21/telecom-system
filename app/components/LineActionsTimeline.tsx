@@ -34,7 +34,7 @@ export default function LineActionsTimeline({ lineNumber }: { lineNumber: string
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-slate-400 text-sm">
-        <Loader2 className="w-4 h-4 animate-spin" /> جاري تحميل الأكشنات...
+        <Loader2 className="w-4 h-4 animate-spin" /> جاري تحميل الاجراءات...
       </div>
     );
   }
@@ -43,7 +43,7 @@ export default function LineActionsTimeline({ lineNumber }: { lineNumber: string
     return (
       <div className="flex flex-col items-center gap-3 py-10 text-slate-400">
         <ClipboardList className="w-9 h-9 text-slate-200" />
-        <p className="text-sm">لا توجد أكشنات لهذا الخط</p>
+        <p className="text-sm">لا توجد اجراءات لهذا الخط</p>
         <Link href="/actions" className="flex items-center gap-1 text-blue-600 text-sm font-medium hover:underline">
           <PlusCircle className="w-4 h-4" /> إنشاء أكشن جديد
         </Link>
