@@ -64,9 +64,9 @@ function makeInAppChannel(supabase: ReturnType<typeof getSupabase>): CronNotific
 // function makeEmailChannel(): CronNotificationChannel { ... }
 
 const KIND_TITLES: Record<CronNotificationPayload["kind"], string> = {
-  due_tomorrow: "أكشن مستحق غداً",
-  due_today: "أكشن مستحق اليوم",
-  overdue: "أكشن متأخر",
+  due_tomorrow: "اجراء مستحق غداً",
+  due_today: "اجراء مستحق اليوم",
+  overdue: "اجراء متأخر",
 };
 
 export async function GET(req: NextRequest) {
@@ -122,7 +122,7 @@ export async function GET(req: NextRequest) {
       const results = await Promise.allSettled(channels.map((c) => c.send(payload)));
       results.forEach((r, i) => {
         if (r.status === "rejected")
-          console.error(`فشل الإرسال عبر ${channels[i].name} للأكشن ${a.id}:`, r.reason);
+          console.error(`فشل الإرسال عبر ${channels[i].name} اجراء ${a.id}:`, r.reason);
       });
       if (results.some((r) => r.status === "fulfilled")) sent++;
 

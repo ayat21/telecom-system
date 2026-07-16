@@ -1,7 +1,7 @@
 // ─── تعريفات مشتركة لموديول الأكشنات ────────────────────────────
 
 export const ACTION_TYPES: { value: string; label: string }[] = [
-  { value: "customer_request", label: "طلب عميل" },
+  { value: "customer_request", label: "طلب خط جديد" },
   { value: "cancellation", label: "إلغاء" },
   { value: "migration", label: "مايجريشن" },
   { value: "package_change", label: "تغيير باقة" },

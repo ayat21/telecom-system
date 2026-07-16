@@ -45,7 +45,7 @@ export default function LineActionsTimeline({ lineNumber }: { lineNumber: string
         <ClipboardList className="w-9 h-9 text-slate-200" />
         <p className="text-sm">لا توجد اجراءات لهذا الخط</p>
         <Link href="/actions" className="flex items-center gap-1 text-blue-600 text-sm font-medium hover:underline">
-          <PlusCircle className="w-4 h-4" /> إنشاء أكشن جديد
+          <PlusCircle className="w-4 h-4" /> إنشاء اجراء جديد
         </Link>
       </div>
     );

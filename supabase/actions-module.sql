@@ -86,7 +86,7 @@ begin
     insert into public.notifications (action_id, user_id, kind, title, description)
     values (
       new.id, new.assigned_user_id, 'high_priority',
-      'أكشن بأولوية ' || case when new.priority = 'urgent' then 'عاجلة' else 'عالية' end,
+      'اجراء بأولوية ' || case when new.priority = 'urgent' then 'عاجلة' else 'عالية' end,
       new.title || ' — خط ' || new.line_number
     );
   end if;
@@ -94,7 +94,7 @@ begin
     insert into public.notifications (action_id, user_id, kind, title, description)
     values (
       new.id, new.assigned_user_id, 'due_today',
-      'أكشن مستحق اليوم',
+      'اجراء مستحق اليوم',
       new.title || ' — خط ' || new.line_number
     );
   end if;
@@ -114,7 +114,7 @@ begin
     insert into public.notifications (action_id, user_id, kind, title, description)
     values (
       new.id, new.assigned_user_id, 'completed',
-      'تم إكمال أكشن',
+      'تم إكمال اجراء',
       new.title || ' — خط ' || new.line_number
         || coalesce(' — بواسطة ' || new.completed_by, '')
     );
