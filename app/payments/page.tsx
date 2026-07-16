@@ -594,7 +594,7 @@ export default function PaymentsPage() {
               <label className="block text-xs text-slate-500 mb-1.5">فلتر القسم</label>
               <select value={filterDepartment} onChange={(e) => setFilterDepartment(e.target.value)}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-200">
-                <option value="">كل الأقسام (بدون SPOC، فوري، العهدة، هيثم)</option>
+                <option value="">كل الأقسام </option>
                 {departmentsList.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
