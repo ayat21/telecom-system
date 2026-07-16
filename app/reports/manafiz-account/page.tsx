@@ -372,6 +372,7 @@ export default function ManafizAccountReportPage() {
                   </span>
                 )}
               </div>
+              <div className="overflow-x-auto">
               <table className="w-full text-base">
                 <thead className="bg-slate-50 text-slate-700 text-sm">
                   <tr>
@@ -426,6 +427,7 @@ export default function ManafizAccountReportPage() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {summary.length > 0 && (

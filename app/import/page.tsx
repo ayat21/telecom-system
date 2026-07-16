@@ -881,7 +881,7 @@ export default function ImportPage() {
 
           <div>
             <label className="block text-sm font-medium text-slate-600 mb-3">نوع الإجراء</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {operations.map((op) => (
                 <button key={op.key} type="button" disabled={loading}
                   onClick={() => { setImportType(op.key); setResult(null); setFile(null); setSelectedColumns([]); }}

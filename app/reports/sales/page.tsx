@@ -322,7 +322,7 @@ const html2canvas = (await import("html2canvas-pro")).default;
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         <StatCard label="إجمالي المبيعات (الفترة)" value={stats.sales} suffix="خط"
           subLabel="% من (مبيعات + غير مباع)" subValue={salesPercent}
           icon={ShoppingBag} iconBg="bg-green-50" iconColor="text-green-600" valueColor="text-green-600" />

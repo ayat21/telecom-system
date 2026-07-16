@@ -2,12 +2,14 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Sidebar from "./Sidebar";
+import TopNavbar from "./TopNavbar";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [checked, setChecked] = useState(false);
   const [hasRole, setHasRole] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const hideSidebar = pathname === "/login";
 
@@ -25,6 +27,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     setChecked(true);
   }, [pathname]);
 
+  // اقفلي الدروار عند تغيير الصفحة (موبايل/تابلت)
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
   if (!checked) return null; // منع أي فلاش لحد ما نتأكد
 
   if (hideSidebar) {
@@ -35,10 +40,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-slate-50" dir="rtl">
-      <Sidebar />
-      <main className="mr-72 transition-all duration-300">
-        {children}
-      </main>
+      <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
+      <div className="mr-0 lg:mr-72 transition-all duration-300 min-w-0">
+        <TopNavbar onOpenMobileMenu={() => setMobileOpen(true)} />
+        <main className="min-w-0">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

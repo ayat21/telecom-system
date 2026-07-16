@@ -11,6 +11,7 @@ import {
 import {
   ResponsiveContainer, Tooltip, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis,
 } from "recharts";
+import ActionWidgets from "@/app/components/ActionWidgets";
 
 const MIGRATION_DEPT_ID = 10;
 
@@ -339,7 +340,7 @@ export default function DashboardPage() {
         ) : (
           <>
             {/* KPI Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
               <KpiCard label="إجمالي الخطوط" value={kpis.totalLines}
                 icon={PhoneCall} iconBg="bg-blue-50" iconColor="text-blue-600" />
               <KpiCard label="مبيعات" value={kpis.sales} sub={`${salesPercent}% من الإجمالي`}
@@ -353,6 +354,9 @@ export default function DashboardPage() {
               <KpiCard label="إجمالي العملاء" value={kpis.totalClients}
                 icon={Users} iconBg="bg-teal-50" iconColor="text-teal-600" />
             </div>
+
+            {/* Action Widgets */}
+            <ActionWidgets />
 
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">

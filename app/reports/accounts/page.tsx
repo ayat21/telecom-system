@@ -335,7 +335,7 @@ export default function AccountsPage() {
         </div>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center justify-between">
             <div>
               <p className="text-xs text-slate-500">إجمالي الأكونتات</p>

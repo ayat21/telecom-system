@@ -457,7 +457,7 @@ if (search.trim()) {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex items-center justify-between">
           <div>
             <p className="text-slate-500 text-sm">إجمالي الخطوط</p>

@@ -191,7 +191,7 @@ export default function SearchPage() {
         {!loading && searched && (
           <>
             {/* Summary */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-5">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <p className="text-xs text-slate-500">نتائج البحث</p>
                 <p className="text-2xl font-bold text-slate-900 mt-1">{results.length}</p>

@@ -10,8 +10,9 @@ import {
   Building2, ListTree, Banknote, History, Save,
   ScanLine, ImagePlus, Upload, CreditCard, IdCard, MapPin, X,
   CheckCircle2, AlertCircle, Search, ChevronDown,
-  PlusCircle,
+  PlusCircle, ClipboardList,
 } from "lucide-react";
+import LineActionsTimeline from "@/app/components/LineActionsTimeline";
 
 function SectionTitle({ title, icon: Icon }: { title: string; icon: React.ElementType }) {
   return (
@@ -250,6 +251,7 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
   const [originalLine, setOriginalLine] = useState<any>(null);
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [activityTab, setActivityTab] = useState<"history" | "actions">("history");
 
   const [providers, setProviders] = useState<any[]>([]);
   const [almanafizList, setAlmanafizList] = useState<any[]>([]);
@@ -990,18 +992,32 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
           </div>
         )}
 
-        {/* History */}
+        {/* History + Actions (tabs) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <div className="flex items-center gap-2 mb-5 -mx-6 -mt-6 px-6 py-4 bg-gradient-to-l from-blue-600 to-blue-500 rounded-t-2xl">
-            <History className="w-6 h-6 text-white" />
-            <h2 className="text-xl font-bold text-white">سجل التعديلات</h2>
+          <div className="flex items-center gap-1 mb-5 -mx-6 -mt-6 px-6 py-3 bg-gradient-to-l from-blue-600 to-blue-500 rounded-t-2xl">
+            <button onClick={() => setActivityTab("history")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${
+                activityTab === "history" ? "bg-white text-blue-700" : "text-white/85 hover:bg-white/10"
+              }`}>
+              <History className="w-4 h-4" /> سجل التعديلات
+            </button>
+            <button onClick={() => setActivityTab("actions")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${
+                activityTab === "actions" ? "bg-white text-blue-700" : "text-white/85 hover:bg-white/10"
+              }`}>
+              <ClipboardList className="w-4 h-4" /> الأكشنات
+            </button>
           </div>
 
-          {historyList.length === 0 && (
+          {activityTab === "actions" && (
+            <LineActionsTimeline lineNumber={line.number || ""} />
+          )}
+
+          {activityTab === "history" && historyList.length === 0 && (
             <div className="text-center text-slate-400 py-8 text-sm">لا يوجد سجلات</div>
           )}
 
-          <div className="space-y-3">
+          <div className={`space-y-3 ${activityTab !== "history" ? "hidden" : ""}`}>
             {historyList.map((item) => {
               const actionLabel =
                 item.action_type === "DELETE" ? "حذف" :
