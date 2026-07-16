@@ -44,6 +44,19 @@ const UPDATABLE_COLUMNS: { key: string; label: string }[] = [
   { key: "has_sim", label: "على شريحة (true/false)" },
 ];
 
+// ─── تطبيع رقم الخط من الشيت ─────────────────────────────────
+// بتعالج مشاكل شائعة في إكسبورت الأرقام: خانة رقمية بتاكل الصفر الأول
+// (01xxxxxxxxx بيبقى 10 خانات بس)، أرقام عربي (٠-٩)، أو رموز/مسافات جوه الرقم
+function normalizeLineNumber(raw: any): string {
+  let s = String(raw ?? "").trim();
+  if (!s) return "";
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+  s = s.replace(/[٠-٩]/g, (d) => String(arabicDigits.indexOf(d)));
+  s = s.replace(/\D/g, "");
+  if (s.length === 10 && !s.startsWith("0")) s = "0" + s;
+  return s;
+}
+
 function lookupId(cache: Map<string, number>, table: string, name: string): number | null {
   if (!name?.trim()) return null;
   return cache.get(`${table}:${name.trim().toLowerCase()}`) ?? null;
@@ -77,7 +90,7 @@ function resolveRowSync(
 ) {
   const str = (v: any) => String(v || "").trim();
   const rowErrors: string[] = [];
-  const number = str(row["number"]);
+  const number = normalizeLineNumber(row["number"]);
 
   const providerName = str(row["provider_name"]);
   const provider_id = providerName ? lookupId(cache, "providers", providerName) : null;
@@ -479,7 +492,7 @@ export default function ImportPage() {
           const allErrors: RowError[] = [];
           for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
-            if (!String(row["number"] || "").trim()) continue;
+            if (!normalizeLineNumber(row["number"])) continue;
             resolveRowSync(row, i, refData.cache, refData, allErrors);
             if (i % 2000 === 0) {
               setProgressPercent(Math.round((i / rows.length) * 30));
@@ -501,7 +514,7 @@ export default function ImportPage() {
         const clientIdMap = new Map<string, number>();
         if (hasClientCols) {
           setProgressText("جارٍ تحميل بيانات العملاء...");
-          const allNumbers = rows.map(r => String(r["number"] || "").trim()).filter(Boolean);
+          const allNumbers = rows.map(r => normalizeLineNumber(r["number"])).filter(Boolean);
           for (let i = 0; i < allNumbers.length; i += 1000) {
             const { data } = await supabase
               .from("lines")
@@ -517,7 +530,7 @@ export default function ImportPage() {
         for (let i = 0; i < rows.length; i += 500) {
           const batch = rows.slice(i, i + 500);
           await Promise.all(batch.map(async (row) => {
-            const number = String(row["number"] || "").trim();
+            const number = normalizeLineNumber(row["number"]);
             if (!number) return;
             const updates: Record<string, any> = {};
             if (hasNameCols) {
@@ -751,7 +764,7 @@ export default function ImportPage() {
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
-          if (!String(row["number"] || "").trim()) continue;
+          if (!normalizeLineNumber(row["number"])) continue;
           const resolved = resolveRowSync(row, i, refData.cache, refData, allErrors);
           records.push(resolved);
           if (i % 2000 === 0) {
@@ -797,23 +810,26 @@ export default function ImportPage() {
         setProgressText(`جارٍ معالجة ${rows.length.toLocaleString()} سجل...`);
 
         let updated = 0;
-        let notFound = 0;
+        let lineNotFound = 0;
+        let noClientLinked = 0;
         let noUpdates = 0;
 
         for (let i = 0; i < rows.length; i += 100) {
           const batch = rows.slice(i, i + 100);
 
           await Promise.all(batch.map(async (row) => {
-            const number = String(row["number"] || "").trim();
+            const number = normalizeLineNumber(row["number"]);
             if (!number) return;
 
-            const { data: lineData } = await supabase
+            const { data: lineData, error: lineErr } = await supabase
               .from("lines")
               .select("client_id")
               .eq("number", number)
-              .single();
+              .maybeSingle();
 
-            if (!lineData?.client_id) { notFound++; return; }
+            if (lineErr) { console.error(lineErr); lineNotFound++; return; }
+            if (!lineData) { lineNotFound++; return; }
+            if (!lineData.client_id) { noClientLinked++; return; }
 
             const updates: Record<string, any> = {};
             const clientName = String(row["client_name"] || "").trim();
@@ -837,7 +853,7 @@ export default function ImportPage() {
         setResult({
           status: "success",
           message: "تم تحديث بيانات العملاء بنجاح ✅",
-          details: `تم تحديث: ${updated} | بدون عميل: ${notFound} | بدون تغيير: ${noUpdates}`,
+          details: `تم تحديث: ${updated} | رقم الخط مش موجود بالنظام: ${lineNotFound} | الخط موجود بدون عميل مربوط: ${noClientLinked} | بدون تغيير: ${noUpdates}`,
         });
       }
 

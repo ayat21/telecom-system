@@ -10,6 +10,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [checked, setChecked] = useState(false);
   const [hasRole, setHasRole] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(localStorage.getItem("sidebar_collapsed") === "1");
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("sidebar_collapsed", next ? "1" : "0");
+      return next;
+    });
+  }
 
   const hideSidebar = pathname === "/login";
 
@@ -40,8 +53,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-slate-50" dir="rtl">
-      <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
-      <div className="mr-0 lg:mr-72 transition-all duration-300 min-w-0">
+      <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)}
+        collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
+      <div className={`mr-0 transition-all duration-300 min-w-0 ${collapsed ? "lg:mr-20" : "lg:mr-72"}`}>
         <TopNavbar onOpenMobileMenu={() => setMobileOpen(true)} />
         <main className="min-w-0">
           {children}

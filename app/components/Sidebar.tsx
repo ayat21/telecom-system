@@ -56,12 +56,15 @@ function getMenuIcon(name: string): React.ElementType {
 export default function Sidebar({
   mobileOpen = false,
   onCloseMobile,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
   const [role, setRole] = useState("");
   const [fullName, setFullName] = useState("");
 
@@ -132,7 +135,7 @@ export default function Sidebar({
               إدارة الخطوط • المبيعات • الباقات • التقارير
             </p>
           )}
-          <button onClick={() => setCollapsed(!collapsed)}
+          <button onClick={onToggleCollapse}
             className="hidden lg:flex mt-4 w-full items-center justify-center bg-slate-800 hover:bg-slate-700 p-2.5 rounded-lg transition-colors"
             title={collapsed ? "توسيع القائمة" : "طي القائمة"}>
             {collapsed
