@@ -27,6 +27,24 @@ const EMPTY_FORM = {
   national_id_image: "",
 };
 
+// إكسيل بيخزّن قيمة واحدة بس في أول خلية من أي "خلايا مدموجة" (merged cells)،
+// وباقي الخلايا في نفس المدى فاضية فعلياً — حتى لو شكلها إنها متملية بنفس القيمة.
+function fillMergedCells(sheet: XLSX.WorkSheet): number {
+  const merges = sheet["!merges"] || [];
+  merges.forEach((merge) => {
+    const startCell = XLSX.utils.encode_cell(merge.s);
+    const startValue = sheet[startCell];
+    if (!startValue) return;
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if (!sheet[addr]) sheet[addr] = { ...startValue };
+      }
+    }
+  });
+  return merges.length;
+}
+
 const PAGE_SIZE = 50;
 
 export default function ClientsPage() {
@@ -52,6 +70,7 @@ export default function ClientsPage() {
   const [importProgress, setImportProgress] = useState(0);
   const [importText, setImportText] = useState("");
   const [importResult, setImportResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin";
@@ -156,53 +175,80 @@ async function importFromExcel() {
   setImportProgress(0);
   setImportText("جارٍ قراءة الملف...");
   setImportResult(null);
-
   try {
     const buffer = await importFile.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[];
+    if (rows.length === 0) throw new Error("الملف فاضي أو مفيهوش صفوف بيانات");
 
-    const records = rows
-      .filter((r) => r["name"] || r["اسم العميل"])
-      .map((r) => ({
-        name: String(r["name"] || r["اسم العميل"] || "").trim(),
-        national_id: String(r["national_id"] || r["الرقم القومي"] || "").trim() || null,
-        address: String(r["address"] || r["العنوان"] || "").trim() || null,
-        national_id_image: String(r["national_id_image"] || "").trim() || null,
-      }));
-
-    // افصل السجلات: اللي عندها national_id واللي معندهاش
-    const withNationalId = records.filter((r) => r.national_id);
-    const withoutNationalId = records.filter((r) => !r.national_id);
-
-    setImportText(`جارٍ رفع ${records.length} عميل...`);
-    let uploaded = 0;
-
-    // اللي عندها national_id → upsert (تجنب تكرار)
-    for (let i = 0; i < withNationalId.length; i += 500) {
-      const batch = withNationalId.slice(i, i + 500);
-      const { error } = await supabase.from("clients").upsert(batch, {
-        onConflict: "national_id",
-        ignoreDuplicates: false,
-      });
-      if (error) throw new Error(error.message);
-      uploaded += batch.length;
-      setImportProgress(Math.round((uploaded / records.length) * 100));
-      setImportText(`تم رفع ${uploaded} من ${records.length}...`);
+    function getField(row: any, ...candidates: string[]): string {
+      const normalized: Record<string, any> = {};
+      for (const k of Object.keys(row)) normalized[k.trim().toLowerCase()] = row[k];
+      for (const c of candidates) {
+        const v = normalized[c.trim().toLowerCase()];
+        if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+      }
+      return "";
     }
 
-    // اللي معندهاش national_id → insert عادي
-    for (let i = 0; i < withoutNationalId.length; i += 500) {
-      const batch = withoutNationalId.slice(i, i + 500);
+    const records = rows
+      .map((r) => ({
+        name: getField(r, "name", "اسم العميل", "client_name", "الاسم"),
+        national_id: getField(r, "national_id", "الرقم القومي") || null,
+        address: getField(r, "address", "العنوان") || null,
+        national_id_image: getField(r, "national_id_image") || null,
+      }))
+      .filter((r) => r.name);
+
+    if (records.length === 0) {
+      const detectedColumns = Object.keys(rows[0] || {}).join("، ") || "—";
+      throw new Error(
+        `مفيش صف فيه اسم عميل. الأعمدة الموجودة فعلياً في الملف: ${detectedColumns} — لازم يبقى فيه عمود اسمه "name" أو "اسم العميل" أو "client_name"`
+      );
+    }
+
+    // ─── جيبي كل الأرقام القومية الموجودة بالفعل في الداتابيز ───
+    setImportText("جارٍ التحقق من الأرقام القومية الموجودة...");
+    const existingNids = new Set<string>();
+    let offset = 0;
+    while (true) {
+      const { data } = await supabase
+        .from("clients")
+        .select("national_id")
+        .not("national_id", "is", null)
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      data.forEach((c: any) => { if (c.national_id) existingNids.add(c.national_id); });
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
+
+    // ─── استبعدي أي سجل رقمه القومي موجود بالفعل ───
+    const toInsert = records.filter((r) => !r.national_id || !existingNids.has(r.national_id));
+    const skipped = records.length - toInsert.length;
+
+    if (toInsert.length === 0) {
+      setImportResult({ status: "success", message: `مفيش عملاء جدد للإضافة — كل الـ ${records.length} موجودين بالفعل (اتم تجاهلهم)` });
+      loadClients();
+      return;
+    }
+
+    setImportText(`جارٍ رفع ${toInsert.length} عميل جديد...`);
+    let uploaded = 0;
+    for (let i = 0; i < toInsert.length; i += 500) {
+      const batch = toInsert.slice(i, i + 500);
       const { error } = await supabase.from("clients").insert(batch);
       if (error) throw new Error(error.message);
       uploaded += batch.length;
-      setImportProgress(Math.round((uploaded / records.length) * 100));
-      setImportText(`تم رفع ${uploaded} من ${records.length}...`);
+      setImportProgress(Math.round((uploaded / toInsert.length) * 100));
+      setImportText(`تم رفع ${uploaded} من ${toInsert.length}...`);
     }
 
-    setImportResult({ status: "success", message: `تم استيراد ${records.length} عميل بنجاح` });
+    setImportResult({
+      status: "success",
+      message: `تم استيراد ${toInsert.length} عميل جديد بنجاح${skipped > 0 ? ` — وتم تجاهل ${skipped} عميل (رقمهم القومي موجود بالفعل)` : ""}`,
+    });
     loadClients();
   } catch (err) {
     setImportResult({ status: "error", message: err instanceof Error ? err.message : "خطأ غير متوقع" });
@@ -216,25 +262,42 @@ async function importFromExcel() {
 
   // ─── Export template ──────────────────────────────────────
   async function exportToExcel() {
-  const { data } = await supabase
-    .from("clients")
-    .select("*")
-    .order("id", { ascending: false });
+    setExporting(true);
+    try {
+      let allClients: Client[] = [];
+      let offset = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("clients")
+          .select("*")
+          .order("id", { ascending: false })
+          .range(offset, offset + 999);
 
-  if (!data) return;
+        if (error) { alert(error.message); return; }
+        if (!data || data.length === 0) break;
 
-  const rows = data.map((c) => ({
-    "name": c.name,
-    "national_id": c.national_id || "",
-    "address": c.address || "",
-    "تاريخ الإضافة": new Date(c.created_at).toLocaleDateString("ar-EG"),
-  }));
+        allClients = allClients.concat(data as Client[]);
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
 
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "العملاء");
-  XLSX.writeFile(wb, `clients-${new Date().toISOString().slice(0, 10)}.xlsx`);
-}
+      if (allClients.length === 0) { alert("لا يوجد عملاء لتصديرهم"); return; }
+
+      const rows = allClients.map((c) => ({
+        "name": c.name,
+        "national_id": c.national_id || "",
+        "address": c.address || "",
+        "تاريخ الإضافة": new Date(c.created_at).toLocaleDateString("ar-EG"),
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "العملاء");
+      XLSX.writeFile(wb, `clients-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (!authorized) return null;
 
@@ -265,9 +328,10 @@ async function importFromExcel() {
               <PlusCircle className="w-4 h-4" /> إضافة عميل
             </button>
           )}
-          <button onClick={exportToExcel}
-  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 transition text-slate-700 px-5 py-2.5 rounded-xl shadow-sm font-medium text-sm">
-  <Download className="w-4 h-4" /> تصدير كل العملاء
+          <button onClick={exportToExcel} disabled={exporting}
+  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition text-slate-700 px-5 py-2.5 rounded-xl shadow-sm font-medium text-sm">
+  {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+  {exporting ? "جاري التصدير..." : "تصدير كل العملاء"}
 </button>
         </div>
 

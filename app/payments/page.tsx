@@ -623,7 +623,7 @@ export default function PaymentsPage() {
         ) : (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-              <StatCard label="إجمالي المطلوب" value={stats.totalRequired.toLocaleString()} suffix="جنيه"
+              <StatCard label="إجمالي المستحق" value={stats.totalRequired.toLocaleString()} suffix="جنيه"
                 icon={CreditCard} iconBg="bg-purple-50" iconColor="text-purple-600" valueColor="text-purple-600" />
               <StatCard label="إجمالي المحصل" value={stats.totalCollected.toLocaleString()} suffix="جنيه"
                 icon={Check} iconBg="bg-green-50" iconColor="text-green-600" valueColor="text-green-600" />

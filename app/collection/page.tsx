@@ -41,7 +41,7 @@ export default function CollectionDashboardPage() {
     totalLines: 0,
     paidLines: 0,
     unpaidLines: 0,
-    totalRevenue: 0,     // المطلوب
+    totalRevenue: 0,     // المستحق
     totalCollected: 0,   // المحصل
   });
   const [unpaidList, setUnpaidList] = useState<any[]>([]);
@@ -187,7 +187,7 @@ export default function CollectionDashboardPage() {
       "رقم الخط": u.number,
       "العميل": u.client,
       "الشبكة": u.provider,
-      "المبلغ المطلوب": u.amount,
+      "المبلغ المستحق": u.amount,
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -348,7 +348,7 @@ export default function CollectionDashboardPage() {
 
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm text-slate-500">إجمالي المطلوب</p>
+                  <p className="text-sm text-slate-500">إجمالي المستحق</p>
                   <DollarSign className="w-4 h-4 text-purple-500" />
                 </div>
                 <p className="text-3xl font-bold text-purple-600 mt-2">{totals.totalRevenue.toLocaleString()}</p>
@@ -419,7 +419,7 @@ export default function CollectionDashboardPage() {
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-slate-500">
-                        المطلوب: <strong className="text-slate-800">{p.revenue.toLocaleString()}</strong>
+                        المستحق: <strong className="text-slate-800">{p.revenue.toLocaleString()}</strong>
                       </span>
                       <span className="text-slate-500">
                         المحصل: <strong className="text-green-600">{p.collected.toLocaleString()}</strong>
@@ -448,7 +448,7 @@ export default function CollectionDashboardPage() {
                       <th className="p-3 text-right font-medium">رقم الخط</th>
                       <th className="p-3 text-right font-medium">العميل</th>
                       <th className="p-3 text-right font-medium">الشبكة</th>
-                      <th className="p-3 text-right font-medium">المبلغ المطلوب</th>
+                      <th className="p-3 text-right font-medium">المبلغ المستحق</th>
                     </tr>
                   </thead>
                   <tbody className="text-slate-700">

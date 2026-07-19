@@ -14,6 +14,8 @@ interface ImportResult {
   status: "success" | "error";
   message: string;
   details?: string;
+  debugColumns?: string[];
+  debugRows?: any[];
 }
 
 interface RowError {
@@ -57,9 +59,40 @@ function normalizeLineNumber(raw: any): string {
   return s;
 }
 
+// مطابقة اسم عمود من الشيت من غير حساسية لحالة الحروف أو المسافات الزيادة
+// (عشان "Client_Name"، "client_name "، "اسم العميل" كلهم يتقابلوا مع بعض)
+function getRowField(row: any, ...candidates: string[]): string {
+  const normalized: Record<string, any> = {};
+  for (const k of Object.keys(row)) normalized[k.trim().toLowerCase()] = row[k];
+  for (const c of candidates) {
+    const v = normalized[c.trim().toLowerCase()];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
 function lookupId(cache: Map<string, number>, table: string, name: string): number | null {
   if (!name?.trim()) return null;
   return cache.get(`${table}:${name.trim().toLowerCase()}`) ?? null;
+}
+
+// إكسيل بيخزّن قيمة واحدة بس في أول خلية من أي "خلايا مدموجة" (merged cells)،
+// وباقي الخلايا في نفس المدى فاضية فعلياً — حتى لو شكلها في الملف إنها متملية بنفس القيمة.
+// من غير الدالة دي، sheet_to_json هيرجّع فاضي لكل الصفوف ما عدا أول صف في كل مجموعة مدموجة.
+function fillMergedCells(sheet: XLSX.WorkSheet): number {
+  const merges = sheet["!merges"] || [];
+  merges.forEach((merge) => {
+    const startCell = XLSX.utils.encode_cell(merge.s);
+    const startValue = sheet[startCell];
+    if (!startValue) return;
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if (!sheet[addr]) sheet[addr] = { ...startValue };
+      }
+    }
+  });
+  return merges.length;
 }
 
 function parseExcelDate(value: any): string | null {
@@ -134,9 +167,9 @@ function resolveRowSync(
   if (!agentName) rowErrors.push(`عمود agent_name فاضي أو ناقص`);
   else if (!agent_id) rowErrors.push(`المندوب "${agentName}" غير موجود`);
 
-  const clientName = str(row["client_name"]);
-  const clientNationalId = str(row["national_id"]);
-  const clientAddress = str(row["address"]);
+  const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
+  const clientNationalId = getRowField(row, "national_id", "الرقم القومي");
+  const clientAddress = getRowField(row, "address", "العنوان");
   let client_id: number | null = null;
   if (clientNationalId) client_id = cache.get(`clients_nid:${clientNationalId.toLowerCase()}`) ?? null;
   if (!client_id && clientName) client_id = cache.get(`clients:${clientName.toLowerCase()}`) ?? null;
@@ -244,6 +277,10 @@ export default function ImportPage() {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: "array" });
           const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const mergeCount = fillMergedCells(sheet);
+          if (mergeCount > 0) {
+            console.warn(`[parseExcel] لقيت ${mergeCount} خلية مدموجة في الملف — اتعمل fill-down تلقائي لقيمتها على كل الصفوف اللي جواها.`);
+          }
           resolve(XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[]);
         } catch (err) { reject(err); }
       };
@@ -252,10 +289,29 @@ export default function ImportPage() {
     });
   }
 
+  // جدول العملاء ممكن يبقى فيه عشرات الآلاف من الصفوف — لازم نجيبه على دفعات
+  // لأن الاستعلام العادي بيتقطع عند حد افتراضي (غالباً 1000 صف) من غير ما يرجّع خطأ
+  async function fetchAllClients(): Promise<{ id: number; name: string; national_id: string | null }[]> {
+    let all: { id: number; name: string; national_id: string | null }[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, name, national_id")
+        .range(offset, offset + 999);
+      if (error) { console.error(error); break; }
+      if (!data || data.length === 0) break;
+      all = all.concat(data as any);
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
+    return all;
+  }
+
   async function loadReferenceTables() {
     const [
       { data: providers }, { data: almanafiz }, { data: heiaat },
-      { data: agents }, { data: clients }, { data: lineStatuses },
+      { data: agents }, clients, { data: lineStatuses },
       { data: callsPackages }, { data: internetPackages }, { data: lineExtensions },
       { data: accounts },
     ] = await Promise.all([
@@ -263,7 +319,7 @@ export default function ImportPage() {
       supabase.from("almanafiz").select("id, name, group_id, groups(id, name, department_id, departments(id, name))"),
       supabase.from("heiaat").select("id, name, group_id"),
       supabase.from("agents").select("id, name"),
-      supabase.from("clients").select("id, name, national_id"),
+      fetchAllClients(),
       supabase.from("line_statuses").select("id, name, provider_id"),
       supabase.from("calls_packages").select("id, package_name, provider_id"),
       supabase.from("internet_packages").select("id, package_name, provider_id"),
@@ -378,7 +434,7 @@ export default function ImportPage() {
 
         if (clientKeyToData.size > 0) {
           setProgressText(`جارٍ معالجة ${clientKeyToData.size} عميل...`);
-          const { data: allClients } = await supabase.from("clients").select("id, name, national_id");
+          const allClients = await fetchAllClients();
           const existingByName = new Map<string, number>();
           const existingByNid = new Map<string, number>();
           (allClients || []).forEach(c => {
@@ -412,6 +468,23 @@ export default function ImportPage() {
 
               if (error) {
                 console.error("Insert clients error:", error.message);
+                // فيه صف واحد اتعارض (سباق مع عملية تانية مثلاً) وخلّى الدفعة كلها ترفض —
+                // نرفع كل صف لوحده عشان الصفوف السليمة متضيعش
+                for (const b of batch) {
+                  const { data: single, error: singleErr } = await supabase.from("clients")
+                    .insert({ name: b.name, national_id: b.national_id, address: b.address })
+                    .select("id, name, national_id")
+                    .single();
+                  if (!singleErr && single) {
+                    resolvedKeyToId.set(b.key, single.id);
+                  } else if (b.national_id) {
+                    // اتعارض على national_id — يبقى العميل ده موجود بالفعل، جيبي الـ id بتاعه
+                    const { data: existing } = await supabase.from("clients")
+                      .select("id").eq("national_id", b.national_id).maybeSingle();
+                    if (existing) resolvedKeyToId.set(b.key, existing.id);
+                  }
+                }
+                continue;
               }
 
               (created || []).forEach((c, idx) => {
@@ -577,12 +650,15 @@ export default function ImportPage() {
 
             if (hasClientCols) {
               const clientFields: Record<string, any> = {};
-              if (selectedColumns.includes("client_name") && String(row["client_name"] || "").trim())
-                clientFields.name = String(row["client_name"]).trim();
-              if (selectedColumns.includes("national_id") && String(row["national_id"] || "").trim())
-                clientFields.national_id = String(row["national_id"]).trim();
-              if (selectedColumns.includes("address") && String(row["address"] || "").trim())
-                clientFields.address = String(row["address"]).trim();
+              const rowClientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
+              const rowNationalId = getRowField(row, "national_id", "الرقم القومي");
+              const rowAddress = getRowField(row, "address", "العنوان");
+              if (selectedColumns.includes("client_name") && rowClientName)
+                clientFields.name = rowClientName;
+              if (selectedColumns.includes("national_id") && rowNationalId)
+                clientFields.national_id = rowNationalId;
+              if (selectedColumns.includes("address") && rowAddress)
+                clientFields.address = rowAddress;
 
               if (Object.keys(clientFields).length > 0) {
                 const clientId = clientIdMap.get(number);
@@ -807,13 +883,131 @@ export default function ImportPage() {
 
       // ─── تحديث بيانات العملاء ─────────────────────────────
       else if (importType === "update_clients") {
-        setProgressText(`جارٍ معالجة ${rows.length.toLocaleString()} سجل...`);
+        setProgressText(`جارٍ جلب بيانات الخطوط...`);
 
+        // ─── الخطوة 1: جيبي client_id لكل رقم خط موجود في الشيت ───
+        const numbersInSheet = [...new Set(
+          rows.map((r) => normalizeLineNumber(r["number"])).filter(Boolean)
+        )];
+        const lineInfoByNumber = new Map<string, { client_id: number | null }>();
+        for (let i = 0; i < numbersInSheet.length; i += 1000) {
+          const { data, error } = await supabase
+            .from("lines")
+            .select("number, client_id")
+            .in("number", numbersInSheet.slice(i, i + 1000));
+          if (error) { console.error(error); continue; }
+          (data || []).forEach((l: any) => lineInfoByNumber.set(l.number, { client_id: l.client_id }));
+        }
+
+        // ─── الخطوة 2: للخطوط اللي من غير عميل — جهزّي بيانات عميل جديد لكل واحد ───
+        const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+        const newClientKeyToData = new Map<string, { name: string; national_id: string | null; address: string | null }>();
+        const numberToNewClientKey = new Map<string, string>();
+
+        rows.forEach((row) => {
+          const number = normalizeLineNumber(row["number"]);
+          if (!number) return;
+          const lineInfo = lineInfoByNumber.get(number);
+          if (!lineInfo || lineInfo.client_id) return; // الخط مش موجود، أو عنده عميل بالفعل
+
+          const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
+          const nationalId = getRowField(row, "national_id", "الرقم القومي");
+          const address = getRowField(row, "address", "العنوان");
+          if (!clientName) return; // مفيش اسم نعمل بيه عميل جديد
+
+          const key = nationalId ? `nid:${nationalId.toLowerCase()}` : `name:${normalize(clientName)}`;
+          if (!newClientKeyToData.has(key)) {
+            newClientKeyToData.set(key, { name: clientName, national_id: nationalId || null, address: address || null });
+          } else if (address && !newClientKeyToData.get(key)!.address) {
+            newClientKeyToData.get(key)!.address = address;
+          }
+          numberToNewClientKey.set(number, key);
+        });
+
+        // ─── الخطوة 3: قارني بعملاء موجودين بالفعل بالرقم القومي قبل إنشاء جديد ───
+        const keyToClientId = new Map<string, number>();
+        let created = 0;
+        if (newClientKeyToData.size > 0) {
+          setProgressText(`جارٍ التحقق من ${newClientKeyToData.size} عميل جديد...`);
+          const allClients = await fetchAllClients();
+          const existingByNid = new Map<string, number>();
+          allClients.forEach((c) => { if (c.national_id) existingByNid.set(c.national_id.toLowerCase(), c.id); });
+
+          const toCreate: { key: string; name: string; national_id: string | null; address: string | null }[] = [];
+          newClientKeyToData.forEach((data, key) => {
+            if (data.national_id && existingByNid.has(data.national_id.toLowerCase())) {
+              keyToClientId.set(key, existingByNid.get(data.national_id.toLowerCase())!);
+            } else {
+              toCreate.push({ key, ...data });
+            }
+          });
+
+          for (let i = 0; i < toCreate.length; i += 500) {
+  const batch = toCreate.slice(i, i + 500);
+  const withNid = batch.filter((b) => b.national_id);
+  const withoutNid = batch.filter((b) => !b.national_id);
+
+  // ─── اللي عندهم رقم قومي: upsert — لو موجود يتحدث، لو مش موجود يتعمل ───
+  if (withNid.length > 0) {
+  // بناخد الـ IDs من رجوع الـ upsert نفسه (مش استعلام SELECT منفصل) — عشان لو فيه
+  // RLS policy على clients بتقيّد SELECT بشكل مختلف عن INSERT/UPDATE، هنشوف الفرق
+  // فوراً بدل ما الصفوف دي تختفي بصمت من غير أي تفسير
+  const { data: upserted, error } = await supabase.from("clients")
+    .upsert(
+      withNid.map((b) => ({ name: b.name, national_id: b.national_id, address: b.address })),
+      { onConflict: "national_id" }
+    )
+    .select("id, national_id");
+
+  if (error) {
+    console.error("Upsert clients error:", error.message);
+  } else if (!upserted || upserted.length !== withNid.length) {
+    console.warn(
+      `[update_clients] الـ upsert رجّع ${upserted?.length ?? 0} صف بس من أصل ${withNid.length} ` +
+      `المفروض يتعملهم upsert — الاحتمال الأكبر إن فيه RLS policy على SELECT لجدول clients ` +
+      `أضيق من policy الـ INSERT/UPDATE، فالصف اتكتب فعلاً بس السيشن الحالية مش شايفاه.`,
+      {
+        اللي_المفروض_يرجع: withNid.map((b) => b.national_id),
+        اللي_رجع_فعلاً: (upserted || []).map((c) => c.national_id),
+      }
+    );
+    const idByNid = new Map<string, number>();
+    (upserted || []).forEach((c) => { if (c.national_id) idByNid.set(c.national_id, c.id); });
+    withNid.forEach((b) => {
+      if (!b.national_id) return;
+      const id = idByNid.get(b.national_id);
+      if (id) { keyToClientId.set(b.key, id); created++; }
+    });
+  } else {
+    upserted.forEach((c, idx) => {
+      keyToClientId.set(withNid[idx].key, c.id);
+      created++;
+    });
+  }
+}
+
+  // ─── اللي من غير رقم قومي: إضافة عادية (مفيش تعارض ممكن يحصل) ───
+  if (withoutNid.length > 0) {
+    const { data, error } = await supabase.from("clients")
+      .insert(withoutNid.map((b) => ({ name: b.name, national_id: null, address: b.address })))
+      .select("id");
+    if (!error) {
+      (data || []).forEach((c, idx) => { keyToClientId.set(withoutNid[idx].key, c.id); created++; });
+    }
+  }
+}
+        }
+
+        // ─── الخطوة 4: اربطي كل خط بعميله (موجود أو جديد) وحدّثي بياناته ───
         let updated = 0;
+        let linked = 0;
         let lineNotFound = 0;
-        let noClientLinked = 0;
+        let noClientCreated = 0;
         let noUpdates = 0;
+        const noClientCreatedDetails: any[] = [];
+        const rawSamples: any[] = [];
 
+        setProgressText(`جارٍ تحديث ${rows.length.toLocaleString()} سجل...`);
         for (let i = 0; i < rows.length; i += 100) {
           const batch = rows.slice(i, i + 100);
 
@@ -821,20 +1015,35 @@ export default function ImportPage() {
             const number = normalizeLineNumber(row["number"]);
             if (!number) return;
 
-            const { data: lineData, error: lineErr } = await supabase
-              .from("lines")
-              .select("client_id")
-              .eq("number", number)
-              .maybeSingle();
+            const lineInfo = lineInfoByNumber.get(number);
+            if (!lineInfo) { lineNotFound++; return; }
 
-            if (lineErr) { console.error(lineErr); lineNotFound++; return; }
-            if (!lineData) { lineNotFound++; return; }
-            if (!lineData.client_id) { noClientLinked++; return; }
+            let clientId = lineInfo.client_id;
+
+            if (!clientId) {
+              const newKey = numberToNewClientKey.get(number);
+              const resolvedId = newKey ? keyToClientId.get(newKey) : undefined;
+              if (!resolvedId) {
+                noClientCreated++;
+                noClientCreatedDetails.push({
+                  رقم_الخط: number,
+                  اسم_العميل_بالشيت: getRowField(row, "client_name", "اسم العميل", "name", "الاسم"),
+                  الرقم_القومي_بالشيت: getRowField(row, "national_id", "الرقم القومي"),
+                  المفتاح_المتوقع: newKey ?? "(مفيش اسم/رقم قومي في الصف أصلاً)",
+                  اتحل_في_الخطوة_3: newKey ? keyToClientId.has(newKey) : false,
+                });
+                if (rawSamples.length < 5) rawSamples.push(row);
+                return;
+              }
+              await supabase.from("lines").update({ client_id: resolvedId }).eq("number", number);
+              clientId = resolvedId;
+              linked++;
+            }
 
             const updates: Record<string, any> = {};
-            const clientName = String(row["client_name"] || "").trim();
-            const nationalId = String(row["national_id"] || "").trim();
-            const address = String(row["address"] || "").trim();
+            const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
+            const nationalId = getRowField(row, "national_id", "الرقم القومي");
+            const address = getRowField(row, "address", "العنوان");
 
             if (clientName) updates.name = clientName;
             if (nationalId) updates.national_id = nationalId;
@@ -842,7 +1051,7 @@ export default function ImportPage() {
 
             if (Object.keys(updates).length === 0) { noUpdates++; return; }
 
-            await supabase.from("clients").update(updates).eq("id", lineData.client_id);
+            await supabase.from("clients").update(updates).eq("id", clientId);
             updated++;
           }));
 
@@ -850,10 +1059,17 @@ export default function ImportPage() {
           setProgressText(`تم معالجة ${Math.min(i + 100, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
         }
 
+        if (noClientCreatedDetails.length > 0) {
+          console.warn(`[update_clients] ${noClientCreatedDetails.length} خط فضل من غير عميل — التفاصيل:`);
+          console.table(noClientCreatedDetails);
+        }
+
         setResult({
           status: "success",
           message: "تم تحديث بيانات العملاء بنجاح ✅",
-          details: `تم تحديث: ${updated} | رقم الخط مش موجود بالنظام: ${lineNotFound} | الخط موجود بدون عميل مربوط: ${noClientLinked} | بدون تغيير: ${noUpdates}`,
+          details: `تم تحديث: ${updated} | عملاء جدد اتعملوا: ${created} | خطوط اترّبطت بعميل جديد/موجود: ${linked} | رقم الخط مش موجود بالنظام: ${lineNotFound} | خط من غير عميل ومفيش اسم بالشيت نعمل بيه عميل: ${noClientCreated} | بدون تغيير: ${noUpdates}`,
+          debugColumns: rows.length > 0 ? Object.keys(rows[0]) : [],
+          debugRows: rawSamples,
         });
       }
 
@@ -1021,6 +1237,28 @@ export default function ImportPage() {
                   <p className={`text-xs mt-1 ${result.status === "success" ? "text-green-600" : "text-red-600"}`}>
                     {result.details}
                   </p>
+                )}
+
+                {result.debugColumns && result.debugColumns.length > 0 && (
+                  <div className="mt-3 text-xs">
+                    <p className="font-semibold text-slate-600">الأعمدة اللي اتقرأت فعلياً من الملف:</p>
+                    <p className="text-slate-500 mt-0.5 font-mono">{result.debugColumns.join("، ")}</p>
+                  </div>
+                )}
+
+                {result.debugRows && result.debugRows.length > 0 && (
+                  <div className="mt-3 text-xs">
+                    <p className="font-semibold text-slate-600">
+                      عينة من الصفوف اللي فشلت (أول {result.debugRows.length}) — البيانات الخام زي ما اتقرأت من الملف:
+                    </p>
+                    <div className="mt-1 space-y-2 max-h-72 overflow-y-auto">
+                      {result.debugRows.map((r, i) => (
+                        <pre key={i} className="bg-white border border-slate-200 rounded-lg p-2 text-[11px] text-slate-700 overflow-x-auto" dir="ltr">
+                          {JSON.stringify(r, null, 2)}
+                        </pre>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

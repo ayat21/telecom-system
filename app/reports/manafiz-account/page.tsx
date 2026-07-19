@@ -168,7 +168,7 @@ export default function ManafizAccountReportPage() {
       "المسددين": s.paid,
       "الغير مسددين": s.unpaid,
       "نسبة السداد": s.total > 0 ? `${Math.round((s.paid / s.total) * 100)}%` : "0%",
-      "إجمالي المطلوب": s.required,
+      "إجمالي المستحق": s.required,
       "إجمالي المحصل": s.collected,
     }));
     const totalRequiredCount = summary.reduce((s, x) => s + x.total, 0);
@@ -180,7 +180,7 @@ export default function ManafizAccountReportPage() {
       "المسددين": totalPaidCount,
       "الغير مسددين": summary.reduce((s, x) => s + x.unpaid, 0),
       "نسبة السداد": totalRequiredCount > 0 ? `${Math.round((totalPaidCount / totalRequiredCount) * 100)}%` : "0%",
-      "إجمالي المطلوب": summary.reduce((s, x) => s + x.required, 0),
+      "إجمالي المستحق": summary.reduce((s, x) => s + x.required, 0),
       "إجمالي المحصل": summary.reduce((s, x) => s + x.collected, 0),
     };
     const wsSummary = XLSX.utils.json_to_sheet([...summaryRows, totalsRow]);
