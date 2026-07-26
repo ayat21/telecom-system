@@ -338,7 +338,7 @@ const html2canvas = (await import("html2canvas-pro")).default;
         <StatCard label="نسبة مايجريشن" value={`${migrationPercent}%`}
           subLabel="من إجمالي الخطوط"
           icon={Users} iconBg="bg-rose-50" iconColor="text-rose-600" valueColor="text-rose-600" />
-        <StatCard label="إجمالي المبيعات (الكل)" value={stats.totalLines} suffix="خط"
+        <StatCard label="إجمالي المبيعات (الكل)" value={totalForSummary} suffix="خط"
           icon={ClipboardList} iconBg="bg-blue-50" iconColor="text-blue-600" valueColor="text-slate-900" />
       </div>
 
@@ -348,7 +348,7 @@ const html2canvas = (await import("html2canvas-pro")).default;
         <SectionCard title="مبيعات حسب المندوب" icon={ClipboardList} className="lg:col-span-5">
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={agentData}>
+              <BarChart data={[...agentData].sort((a, b) => b.sales - a.sales).slice(0, 5)}>
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} interval={0} />
                 <YAxis tick={{ fontSize: 11, fill: "#64748b" }} />
                 <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", direction: "rtl" }} />
