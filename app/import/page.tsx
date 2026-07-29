@@ -732,40 +732,31 @@ export default function ImportPage() {
         });
       }
 
-      // ─── Deactivate مجمع (زي زرار Deactive الفردي بس على مجموعة أرقام) ───
+     // ─── Deactivate مجمع (زي زرار Deactive الفردي بس على مجموعة أرقام) ───
       else if (importType === "bulk_deactivate") {
         const numbers = rows.map((r) => String(r["number"] || "").trim()).filter(Boolean);
         setProgressText(`جارٍ جلب بيانات ${numbers.length} خط...`);
-
         const nowIso = new Date().toISOString();
         const userName = localStorage.getItem("full_name") || "Unknown";
-
         let deactivatedCount = 0;
         let notFoundCount = 0;
         let alreadyDeactiveCount = 0;
-
         for (let i = 0; i < numbers.length; i += 300) {
           const batchNumbers = numbers.slice(i, i + 300);
-
           // جيبي بيانات الخطوط الحالية (قبل المسح) في batch
           const { data: existingLines, error: fetchError } = await supabase
             .from("lines")
             .select("id, number, client_id, almanafiz_id, heiaat_id, customer_date_real, is_deactive, clients(name, national_id, address), almanafiz(name), heiaat(name)")
             .in("number", batchNumbers);
-
           if (fetchError) throw new Error(fetchError.message);
-
           const foundNumbers = new Set((existingLines || []).map((l: any) => l.number));
           notFoundCount += batchNumbers.filter((n) => !foundNumbers.has(n)).length;
-
           const toProcess = (existingLines || []).filter((l: any) => !l.is_deactive);
           alreadyDeactiveCount += (existingLines || []).filter((l: any) => l.is_deactive).length;
-
           if (toProcess.length === 0) {
             setProgressPercent(Math.round((Math.min(i + 300, numbers.length) / numbers.length) * 100));
             continue;
           }
-
           // حضّري سجلات history + audit_logs
           const historyRecords = toProcess.map((line: any) => ({
             number: line.number,
@@ -776,7 +767,6 @@ export default function ImportPage() {
             action_type: "deactivated",
             action_date: nowIso,
           }));
-
           const auditRecords = toProcess.map((line: any) => ({
             user_name: userName,
             action_type: "DEACTIVATE",
@@ -788,7 +778,6 @@ export default function ImportPage() {
               customer_date: { old: line.customer_date_real || "—", new: "—" },
             },
           }));
-
           if (historyRecords.length > 0) {
             const { error } = await supabase.from("history").insert(historyRecords);
             if (error) throw new Error(error.message);
@@ -797,7 +786,6 @@ export default function ImportPage() {
             const { error } = await supabase.from("audit_logs").insert(auditRecords);
             if (error) throw new Error(error.message);
           }
-
           // حدّثي كل خط بالمدة الصحيحة بتاعته (durationDays بيختلف حسب customer_date_real)
           await Promise.all(toProcess.map(async (line: any) => {
             let durationDays: number | null = null;
@@ -810,18 +798,18 @@ export default function ImportPage() {
               client_id: null,
               almanafiz_id: null,
               heiaat_id: null,
+              department_id: null,
+              group_id: null,
               customer_date_real: null,
               is_deactive: true,
               deactive_date: nowIso,
               active_duration_days: durationDays,
             }).eq("id", line.id);
           }));
-
           deactivatedCount += toProcess.length;
           setProgressPercent(Math.round((Math.min(i + 300, numbers.length) / numbers.length) * 100));
           setProgressText(`تم إلغاء تفعيل ${deactivatedCount.toLocaleString()} من ${numbers.length.toLocaleString()}...`);
         }
-
         setResult({
           status: "success",
           message: "تم إلغاء تفعيل الخطوط بنجاح ✅",
