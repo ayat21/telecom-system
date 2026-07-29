@@ -438,25 +438,26 @@ export default function PaymentsPage() {
         setSheetText(`تم رفع ${uploaded} من ${uniqueRecords.length}...`);
       }
 
-      // ─── امسحي أي سداد كان من الشيت وبقى محذوف منه دلوقتي ───
-      setSheetText("جارٍ مزامنة الحذف...");
-      const currentKeys = new Set(uniqueRecords.map((r) => r.sheet_key));
+     // ─── امسحي أي سداد كان من الشيت وبقى محذوف منه دلوقتي — بس لنفس الشهر المختار ───
+setSheetText("جارٍ مزامنة الحذف...");
+const currentKeys = new Set(uniqueRecords.map((r) => r.sheet_key));
 
-      const existingKeys: string[] = [];
-      let ekOffset = 0;
-      while (true) {
-        const { data } = await supabase
-          .from("payments")
-          .select("sheet_key")
-          .not("sheet_key", "is", null)
-          .range(ekOffset, ekOffset + 999);
-        if (!data || data.length === 0) break;
-        data.forEach((r: any) => { if (r.sheet_key) existingKeys.push(r.sheet_key); });
-        if (data.length < 1000) break;
-        ekOffset += 1000;
-      }
+const existingKeys: string[] = [];
+let ekOffset = 0;
+while (true) {
+  const { data } = await supabase
+    .from("payments")
+    .select("sheet_key")
+    .not("sheet_key", "is", null)
+    .eq("payment_month", sheetImportMonth)   // ← أهم إضافة: نطاق الحذف يقتصر على الشهر ده بس
+    .range(ekOffset, ekOffset + 999);
+  if (!data || data.length === 0) break;
+  data.forEach((r: any) => { if (r.sheet_key) existingKeys.push(r.sheet_key); });
+  if (data.length < 1000) break;
+  ekOffset += 1000;
+}
 
-      const keysToDelete = existingKeys.filter((k) => !currentKeys.has(k));
+const keysToDelete = existingKeys.filter((k) => !currentKeys.has(k));
 
       if (keysToDelete.length > 0) {
         setSheetText(`جارٍ حذف ${keysToDelete.length} سداد اتشال من الشيت...`);
