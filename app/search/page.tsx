@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
@@ -9,7 +9,22 @@ import {
   User, Network, Package, Tag, Calendar,
   DollarSign, Hash, Plug, Briefcase, Building2,
   ListTree, CreditCard, ScanLine, StickyNote, CheckCircle2, XCircle,
+  AlertTriangle, Copy,
 } from "lucide-react";
+
+// ─── تطبيع رقم الخط: بيقبل الرقم بالصفر الأول أو من غيره، أرقام عربي، ورموز جوه الرقم ───
+function normalizeLineNumber(raw: string): string {
+  let s = raw.trim();
+  if (!s) return "";
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+  s = s.replace(/[٠-٩]/g, (d) => String(arabicDigits.indexOf(d)));
+  s = s.replace(/\D/g, "");
+  if (s.length === 10 && !s.startsWith("0")) s = "0" + s;
+  return s;
+}
+
+// رقم موبايل مصري صحيح: 01 + (0/1/2/5) + 8 أرقام = 11 رقم بالظبط
+const VALID_NUMBER_RE = /^01[0125]\d{8}$/;
 
 export default function SearchPage() {
   const router = useRouter();
@@ -34,9 +49,24 @@ export default function SearchPage() {
       .filter((s) => s.length > 0);
   }
 
+  // ─── تحليل الأرقام المدخلة: تطبيع + تكرار + صيغة غلط ───────
+  const analysis = useMemo(() => {
+    const raw = parseNumbers(input);
+    const normalized = raw.map(normalizeLineNumber).filter(Boolean);
+
+    const counts = new Map<string, number>();
+    normalized.forEach((n) => counts.set(n, (counts.get(n) || 0) + 1));
+    const duplicates = [...counts.entries()].filter(([, c]) => c > 1).map(([n]) => n);
+
+    const uniqueNumbers = [...new Set(normalized)];
+    const invalid = uniqueNumbers.filter((n) => !VALID_NUMBER_RE.test(n));
+
+    return { raw, uniqueNumbers, duplicates, invalid };
+  }, [input]);
+
   // ─── Search ───────────────────────────────────────────────
   async function handleSearch() {
-    const numbers = parseNumbers(input);
+    const numbers = analysis.uniqueNumbers;
     if (numbers.length === 0) return;
 
     setLoading(true);
@@ -159,8 +189,8 @@ export default function SearchPage() {
           />
           <div className="flex items-center justify-between mt-3">
             <p className="text-xs text-slate-400">
-              {parseNumbers(input).length > 0
-                ? `${parseNumbers(input).length} رقم`
+              {analysis.raw.length > 0
+                ? `${analysis.raw.length} رقم — مش لازم تكتبي الصفر الأول، هنكمّله تلقائي`
                 : "ادخلي الأرقام مفصولة بسطر جديد أو فاصلة أو مسافة"}
             </p>
             <div className="flex gap-2">
@@ -172,13 +202,31 @@ export default function SearchPage() {
               )}
               <button
                 onClick={handleSearch}
-                disabled={loading || parseNumbers(input).length === 0}
+                disabled={loading || analysis.uniqueNumbers.length === 0}
                 className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2 rounded-xl font-medium text-sm transition">
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                 بحث
               </button>
             </div>
           </div>
+
+          {/* تحذيرات: أرقام مكررة أو بصيغة غلط */}
+          {(analysis.duplicates.length > 0 || analysis.invalid.length > 0) && (
+            <div className="mt-3 space-y-2">
+              {analysis.duplicates.length > 0 && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+                  <Copy className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span><span className="font-semibold">أرقام مكررة ({analysis.duplicates.length}): </span>{analysis.duplicates.join("، ")}</span>
+                </div>
+              )}
+              {analysis.invalid.length > 0 && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span><span className="font-semibold">أرقام بصيغة غلط ({analysis.invalid.length}): </span>{analysis.invalid.join("، ")}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Results */}
@@ -195,7 +243,7 @@ export default function SearchPage() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <p className="text-xs text-slate-500">نتائج البحث</p>
                 <p className="text-2xl font-bold text-slate-900 mt-1">{results.length}</p>
-                <p className="text-xs text-slate-400">من {parseNumbers(input).length} رقم مدخل</p>
+                <p className="text-xs text-slate-400">من {analysis.uniqueNumbers.length} رقم فريد</p>
               </div>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <p className="text-xs text-slate-500">إجمالي الفواتير</p>
@@ -205,7 +253,7 @@ export default function SearchPage() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <p className="text-xs text-slate-500">أرقام مش موجودة</p>
                 <p className="text-2xl font-bold text-red-500 mt-1">
-                  {parseNumbers(input).length - results.length}
+                  {analysis.uniqueNumbers.length - results.length}
                 </p>
                 <p className="text-xs text-slate-400">رقم</p>
               </div>
@@ -222,12 +270,12 @@ export default function SearchPage() {
             <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
               <div className="flex flex-wrap gap-2">
                 {/* أرقام مش موجودة */}
-                {parseNumbers(input).filter(
+                {analysis.uniqueNumbers.filter(
                   (n) => !results.find((r) => r.number === n)
                 ).length > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
                     <span className="font-semibold">أرقام مش موجودة: </span>
-                    {parseNumbers(input)
+                    {analysis.uniqueNumbers
                       .filter((n) => !results.find((r) => r.number === n))
                       .join("، ")}
                   </div>

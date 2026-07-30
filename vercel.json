@@ -9,6 +9,10 @@
       "schedule": "0 14 * * *"
     },
     {
+      "path": "/api/cron/department-collection-report",
+      "schedule": "0 14 * * *"
+    },
+    {
       "path": "/api/cron/actions-notifications",
       "schedule": "0 6 * * *"
     }
