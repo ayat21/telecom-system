@@ -10,7 +10,7 @@ export const maxDuration = 45;
 const MIGRATION_DEPT_ID = 10;
 
 // ─── غيّري التاريخ ده لأي تاريخ عايزة التقرير يبدأ منه ───
-const START_DATE = "2026-06-28";
+const START_DATE = "2026-07-28";
 
 function getSupabase() {
   return createClient(

@@ -1,15 +1,30 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
   Building2, PlusCircle, Search, Pencil, Trash2, Loader2,
   Download, Upload, X, Check, ChevronLeft, ChevronRight,
-  Network, Hash, FileSpreadsheet, BarChart2,
+  Network, Hash, FileSpreadsheet, BarChart2, ListChecks, ImageDown,
 } from "lucide-react";
 import SortableTable from "@/app/components/SortableTable";
+
+interface AccountStatusRow {
+  account_no: string;
+  account_name: string;
+  providerName: string;
+  total: number;
+  active: number;
+  byStatus: Record<string, number>;
+}
+
+interface AccountStatusReport {
+  columns: string[]; // أسماء الحالات (غير "Active") اللي عندها أرقام فعلاً — بالترتيب
+  rows: AccountStatusRow[];
+  totals: { total: number; active: number; byStatus: Record<string, number> };
+}
 
 interface Account {
   id: number;
@@ -65,6 +80,12 @@ export default function AccountsPage() {
   const [importProgress, setImportProgress] = useState(0);
   const [importText, setImportText] = useState("");
   const [importResult, setImportResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
+
+  // ─── تقرير الحالات حسب الأكونت (زي تقرير الشبكة) ───────────
+  const [statusReport, setStatusReport] = useState<AccountStatusReport | null>(null);
+  const [statusReportLoading, setStatusReportLoading] = useState(false);
+  const [exportingStatusImage, setExportingStatusImage] = useState(false);
+  const statusReportRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin";
@@ -187,6 +208,113 @@ export default function AccountsPage() {
       byProvider: [...providerMap.entries()].map(([name, v]) => ({ name, ...v })),
       topAccounts,
     });
+  }
+
+  // ─── تقرير الحالات حسب الأكونت — Total/Active + كل حالة عندها أرقام ───
+  async function loadStatusReport() {
+    setStatusReportLoading(true);
+    try {
+      const [{ data: allAccounts }, { data: allStatuses }] = await Promise.all([
+        supabase.from("accounts").select("id, account_no, account_name, provider_id, providers(name)"),
+        supabase.from("line_statuses").select("id, name, provider_id"),
+      ]);
+
+      const statusNameById = new Map<number, string>();
+      (allStatuses || []).forEach((s: any) => statusNameById.set(s.id, s.name));
+
+      // جيبي كل الخطوط المرتبطة بأكونت (على دفعات)
+      const lines: { account_id: number; line_status_id: number | null }[] = [];
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("lines")
+          .select("account_id, line_status_id")
+          .not("account_id", "is", null)
+          .or("is_deleted.is.null,is_deleted.eq.false")
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        lines.push(...(data as any));
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+
+      // اجمعي لكل أكونت: الإجمالي + عدد كل حالة
+      const accountAgg = new Map<number, { total: number; byStatus: Map<string, number> }>();
+      lines.forEach((l) => {
+        if (!accountAgg.has(l.account_id)) accountAgg.set(l.account_id, { total: 0, byStatus: new Map() });
+        const agg = accountAgg.get(l.account_id)!;
+        agg.total++;
+        const statusName = l.line_status_id ? statusNameById.get(l.line_status_id) : null;
+        if (statusName) agg.byStatus.set(statusName, (agg.byStatus.get(statusName) || 0) + 1);
+      });
+
+      // حددي أسماء الحالات اللي عندها أرقام فعلاً (غير Active) — بترتيب إجمالي العدد تنازلياً
+      const statusTotals = new Map<string, number>();
+      accountAgg.forEach((agg) => {
+        agg.byStatus.forEach((count, name) => {
+          if (name.trim().toLowerCase() === "active") return;
+          statusTotals.set(name, (statusTotals.get(name) || 0) + count);
+        });
+      });
+      const columns = [...statusTotals.entries()]
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+
+      const rows: AccountStatusRow[] = (allAccounts || [])
+        .map((a: any) => {
+          const agg = accountAgg.get(a.id);
+          const total = agg?.total || 0;
+          const active = agg?.byStatus.get("Active") || agg?.byStatus.get("active") || 0;
+          const byStatus: Record<string, number> = {};
+          columns.forEach((c) => { byStatus[c] = agg?.byStatus.get(c) || 0; });
+          return {
+            account_no: a.account_no,
+            account_name: a.account_name || "—",
+            providerName: a.providers?.name || "—",
+            total, active, byStatus,
+          };
+        })
+        .filter((r) => r.total > 0)
+        .sort((a, b) => a.account_no.localeCompare(b.account_no));
+
+      const totals = rows.reduce(
+        (acc, r) => {
+          acc.total += r.total;
+          acc.active += r.active;
+          columns.forEach((c) => { acc.byStatus[c] = (acc.byStatus[c] || 0) + r.byStatus[c]; });
+          return acc;
+        },
+        { total: 0, active: 0, byStatus: Object.fromEntries(columns.map((c) => [c, 0])) as Record<string, number> }
+      );
+
+      setStatusReport({ columns, rows, totals });
+    } finally {
+      setStatusReportLoading(false);
+    }
+  }
+
+  // ─── تصدير تقرير الحالات كصورة (نفس أسلوب باقي التقارير) ───
+  async function exportStatusReportImage() {
+    if (!statusReportRef.current) return;
+    setExportingStatusImage(true);
+    try {
+      const html2canvas = (await import("html2canvas-pro")).default;
+      const canvas = await html2canvas(statusReportRef.current, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+      });
+      const link = document.createElement("a");
+      link.download = `تقرير_الحالات_حسب_الاكونت_${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      console.error(err);
+      alert("حصل خطأ أثناء تصدير الصورة");
+    } finally {
+      setExportingStatusImage(false);
+    }
   }
 
   useEffect(() => { loadAccounts(); loadDashStats(); }, []);
@@ -455,6 +583,87 @@ export default function AccountsPage() {
               );
             })}
           </div>
+        </div>
+
+        {/* تقرير الحالات حسب الأكونت */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <h2 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <ListChecks className="w-4 h-4 text-blue-600" />
+              تقرير الحالات حسب الأكونت
+            </h2>
+            <div className="flex items-center gap-2">
+              {statusReport && statusReport.rows.length > 0 && (
+                <button onClick={exportStatusReportImage} disabled={exportingStatusImage}
+                  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition">
+                  {exportingStatusImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageDown className="w-4 h-4" />}
+                  تصدير كصورة
+                </button>
+              )}
+              <button onClick={loadStatusReport} disabled={statusReportLoading}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
+                {statusReportLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart2 className="w-4 h-4" />}
+                {statusReport ? "تحديث" : "عرض التقرير"}
+              </button>
+            </div>
+          </div>
+
+          {statusReport && (
+            statusReport.rows.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-8">لا توجد بيانات</p>
+            ) : (
+              <div ref={statusReportRef} className="overflow-x-auto bg-white">
+                <table className="w-full text-sm border-collapse" id="account-status-report-table">
+                  <thead>
+                    <tr className="bg-blue-700 text-white">
+                      <th className="p-2.5 text-right font-medium whitespace-nowrap">رقم الأكونت</th>
+                      <th className="p-2.5 text-right font-medium whitespace-nowrap">اسم الأكونت</th>
+                      <th className="p-2.5 text-center font-medium whitespace-nowrap">Total</th>
+                      <th className="p-2.5 text-center font-medium whitespace-nowrap">Active</th>
+                      {statusReport.columns.map((c) => (
+                        <th key={c} className="p-2.5 text-center font-medium whitespace-nowrap">{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statusReport.rows.map((r, i) => (
+                      <tr key={r.account_no} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                        <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap">{r.account_no}</td>
+                        <td className="p-2.5 text-slate-700 whitespace-nowrap">{r.account_name}</td>
+                        <td className="p-2.5 text-center font-bold text-slate-900">{r.total.toLocaleString()}</td>
+                        <td className="p-2.5 text-center font-semibold text-green-600">{r.active.toLocaleString()}</td>
+                        {statusReport.columns.map((c) => (
+                          <td key={c} className={`p-2.5 text-center ${r.byStatus[c] > 0 ? "font-semibold text-red-500" : "text-slate-300"}`}>
+                            {r.byStatus[c].toLocaleString()}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-800 text-white font-bold">
+                      <td className="p-2.5" colSpan={2}>Total</td>
+                      <td className="p-2.5 text-center">{statusReport.totals.total.toLocaleString()}</td>
+                      <td className="p-2.5 text-center">{statusReport.totals.active.toLocaleString()}</td>
+                      {statusReport.columns.map((c) => (
+                        <td key={c} className="p-2.5 text-center">{statusReport.totals.byStatus[c].toLocaleString()}</td>
+                      ))}
+                    </tr>
+                  </tfoot>
+                </table>
+                <div className="mt-3 bg-slate-100 rounded-xl px-4 py-3 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-600">إجمالي الخطوط الموقوفة</span>
+                  <span className="text-lg font-bold text-red-500">
+                    {(statusReport.totals.total - statusReport.totals.active).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            )
+          )}
+
+          {!statusReport && !statusReportLoading && (
+            <p className="text-sm text-slate-400 text-center py-8">اضغطي "عرض التقرير" لحساب توزيع الحالات على كل أكونت</p>
+          )}
         </div>
 
         {/* Actions */}

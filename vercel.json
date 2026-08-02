@@ -13,6 +13,10 @@
       "schedule": "0 14 * * *"
     },
     {
+      "path": "/api/cron/account-status-report",
+      "schedule": "0 14 * * *"
+    },
+    {
       "path": "/api/cron/actions-notifications",
       "schedule": "0 6 * * *"
     }

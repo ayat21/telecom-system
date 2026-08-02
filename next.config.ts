@@ -7,6 +7,7 @@ const nextConfig = {
     "/api/cron/sales-report": ["./node_modules/@sparticuz/chromium/**"],
     "/api/cron/collection-report": ["./node_modules/@sparticuz/chromium/**"],
     "/api/cron/department-collection-report": ["./node_modules/@sparticuz/chromium/**"],
+    "/api/cron/account-status-report": ["./node_modules/@sparticuz/chromium/**"],
   },
 };
 
