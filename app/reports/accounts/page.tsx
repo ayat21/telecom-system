@@ -26,6 +26,11 @@ interface AccountStatusReport {
   totals: { total: number; active: number; byStatus: Record<string, number> };
 }
 
+interface ProviderStatusReport {
+  providerName: string;
+  report: AccountStatusReport;
+}
+
 interface Account {
   id: number;
   account_no: string;
@@ -81,11 +86,11 @@ export default function AccountsPage() {
   const [importText, setImportText] = useState("");
   const [importResult, setImportResult] = useState<{ status: "success" | "error"; message: string } | null>(null);
 
-  // ─── تقرير الحالات حسب الأكونت (زي تقرير الشبكة) ───────────
-  const [statusReport, setStatusReport] = useState<AccountStatusReport | null>(null);
+  // ─── تقرير الحالات حسب الأكونت — تقرير مستقل لكل شبكة ──────
+  const [providerReports, setProviderReports] = useState<ProviderStatusReport[] | null>(null);
   const [statusReportLoading, setStatusReportLoading] = useState(false);
-  const [exportingStatusImage, setExportingStatusImage] = useState(false);
-  const statusReportRef = useRef<HTMLDivElement>(null);
+  const [exportingProvider, setExportingProvider] = useState<string | null>(null);
+  const statusReportRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin";
@@ -261,7 +266,7 @@ export default function AccountsPage() {
         .sort((a, b) => b[1] - a[1])
         .map(([name]) => name);
 
-      const rows: AccountStatusRow[] = (allAccounts || [])
+      const allRows: AccountStatusRow[] = (allAccounts || [])
         .map((a: any) => {
           const agg = accountAgg.get(a.id);
           const total = agg?.total || 0;
@@ -278,42 +283,59 @@ export default function AccountsPage() {
         .filter((r) => r.total > 0)
         .sort((a, b) => a.account_no.localeCompare(b.account_no));
 
-      const totals = rows.reduce(
-        (acc, r) => {
-          acc.total += r.total;
-          acc.active += r.active;
-          columns.forEach((c) => { acc.byStatus[c] = (acc.byStatus[c] || 0) + r.byStatus[c]; });
-          return acc;
-        },
-        { total: 0, active: 0, byStatus: Object.fromEntries(columns.map((c) => [c, 0])) as Record<string, number> }
-      );
+      // ─── قسّمي التقرير لتقرير مستقل لكل شبكة، وكل شبكة تاخد أعمدة الحالات اللي فعلاً عندها ───
+      const providerNames = [...new Set(allRows.map((r) => r.providerName))].sort();
+      const reports: ProviderStatusReport[] = providerNames.map((providerName) => {
+        const rows = allRows.filter((r) => r.providerName === providerName);
 
-      setStatusReport({ columns, rows, totals });
+        const provColumns = columns.filter((c) => rows.some((r) => r.byStatus[c] > 0));
+
+        const provRows = rows.map((r) => {
+          const byStatus: Record<string, number> = {};
+          provColumns.forEach((c) => { byStatus[c] = r.byStatus[c]; });
+          return { ...r, byStatus };
+        });
+
+        const totals = provRows.reduce(
+          (acc, r) => {
+            acc.total += r.total;
+            acc.active += r.active;
+            provColumns.forEach((c) => { acc.byStatus[c] = (acc.byStatus[c] || 0) + r.byStatus[c]; });
+            return acc;
+          },
+          { total: 0, active: 0, byStatus: Object.fromEntries(provColumns.map((c) => [c, 0])) as Record<string, number> }
+        );
+
+        return { providerName, report: { columns: provColumns, rows: provRows, totals } };
+      });
+
+      setProviderReports(reports);
     } finally {
       setStatusReportLoading(false);
     }
   }
 
-  // ─── تصدير تقرير الحالات كصورة (نفس أسلوب باقي التقارير) ───
-  async function exportStatusReportImage() {
-    if (!statusReportRef.current) return;
-    setExportingStatusImage(true);
+  // ─── تصدير تقرير شبكة معينة كصورة (نفس أسلوب باقي التقارير) ───
+  async function exportStatusReportImage(providerName: string) {
+    const el = statusReportRefs.current[providerName];
+    if (!el) return;
+    setExportingProvider(providerName);
     try {
       const html2canvas = (await import("html2canvas-pro")).default;
-      const canvas = await html2canvas(statusReportRef.current, {
+      const canvas = await html2canvas(el, {
         backgroundColor: "#ffffff",
         scale: 2,
         useCORS: true,
       });
       const link = document.createElement("a");
-      link.download = `تقرير_الحالات_حسب_الاكونت_${new Date().toISOString().slice(0, 10)}.png`;
+      link.download = `تقرير_الحالات_${providerName}_${new Date().toISOString().slice(0, 10)}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
       console.error(err);
       alert("حصل خطأ أثناء تصدير الصورة");
     } finally {
-      setExportingStatusImage(false);
+      setExportingProvider(null);
     }
   }
 
@@ -585,84 +607,101 @@ export default function AccountsPage() {
           </div>
         </div>
 
-        {/* تقرير الحالات حسب الأكونت */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-6">
+        {/* تقرير الحالات حسب الأكونت — تقرير مستقل لكل شبكة */}
+        <div className="mb-6">
           <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
             <h2 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
               <ListChecks className="w-4 h-4 text-blue-600" />
               تقرير الحالات حسب الأكونت
             </h2>
-            <div className="flex items-center gap-2">
-              {statusReport && statusReport.rows.length > 0 && (
-                <button onClick={exportStatusReportImage} disabled={exportingStatusImage}
-                  className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition">
-                  {exportingStatusImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageDown className="w-4 h-4" />}
-                  تصدير كصورة
-                </button>
-              )}
-              <button onClick={loadStatusReport} disabled={statusReportLoading}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
-                {statusReportLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart2 className="w-4 h-4" />}
-                {statusReport ? "تحديث" : "عرض التقرير"}
-              </button>
-            </div>
+            <button onClick={loadStatusReport} disabled={statusReportLoading}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
+              {statusReportLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart2 className="w-4 h-4" />}
+              {providerReports ? "تحديث" : "عرض التقرير"}
+            </button>
           </div>
 
-          {statusReport && (
-            statusReport.rows.length === 0 ? (
-              <p className="text-sm text-slate-400 text-center py-8">لا توجد بيانات</p>
-            ) : (
-              <div ref={statusReportRef} className="overflow-x-auto bg-white">
-                <table className="w-full text-sm border-collapse" id="account-status-report-table">
-                  <thead>
-                    <tr className="bg-blue-700 text-white">
-                      <th className="p-2.5 text-right font-medium whitespace-nowrap">رقم الأكونت</th>
-                      <th className="p-2.5 text-right font-medium whitespace-nowrap">اسم الأكونت</th>
-                      <th className="p-2.5 text-center font-medium whitespace-nowrap">Total</th>
-                      <th className="p-2.5 text-center font-medium whitespace-nowrap">Active</th>
-                      {statusReport.columns.map((c) => (
-                        <th key={c} className="p-2.5 text-center font-medium whitespace-nowrap">{c}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {statusReport.rows.map((r, i) => (
-                      <tr key={r.account_no} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                        <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap">{r.account_no}</td>
-                        <td className="p-2.5 text-slate-700 whitespace-nowrap">{r.account_name}</td>
-                        <td className="p-2.5 text-center font-bold text-slate-900">{r.total.toLocaleString()}</td>
-                        <td className="p-2.5 text-center font-semibold text-green-600">{r.active.toLocaleString()}</td>
-                        {statusReport.columns.map((c) => (
-                          <td key={c} className={`p-2.5 text-center ${r.byStatus[c] > 0 ? "font-semibold text-red-500" : "text-slate-300"}`}>
-                            {r.byStatus[c].toLocaleString()}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-800 text-white font-bold">
-                      <td className="p-2.5" colSpan={2}>Total</td>
-                      <td className="p-2.5 text-center">{statusReport.totals.total.toLocaleString()}</td>
-                      <td className="p-2.5 text-center">{statusReport.totals.active.toLocaleString()}</td>
-                      {statusReport.columns.map((c) => (
-                        <td key={c} className="p-2.5 text-center">{statusReport.totals.byStatus[c].toLocaleString()}</td>
-                      ))}
-                    </tr>
-                  </tfoot>
-                </table>
-                <div className="mt-3 bg-slate-100 rounded-xl px-4 py-3 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-600">إجمالي الخطوط الموقوفة</span>
-                  <span className="text-lg font-bold text-red-500">
-                    {(statusReport.totals.total - statusReport.totals.active).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-            )
+          {providerReports && providerReports.length === 0 && (
+            <p className="text-sm text-slate-400 text-center py-8 bg-white rounded-2xl border border-slate-100">لا توجد بيانات</p>
           )}
 
-          {!statusReport && !statusReportLoading && (
-            <p className="text-sm text-slate-400 text-center py-8">اضغطي "عرض التقرير" لحساب توزيع الحالات على كل أكونت</p>
+          {providerReports && providerReports.length > 0 && (
+            <div className="space-y-5">
+              {providerReports.map(({ providerName, report }) => {
+                const dateLabel = new Date().toLocaleDateString("en-CA").replace(/-/g, "/");
+                return (
+                  <div key={providerName} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div className="flex items-center justify-end gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                      <button onClick={() => exportStatusReportImage(providerName)} disabled={exportingProvider === providerName}
+                        className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium transition">
+                        {exportingProvider === providerName ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageDown className="w-3.5 h-3.5" />}
+                        تصدير كصورة
+                      </button>
+                    </div>
+
+                    <div ref={(el) => { statusReportRefs.current[providerName] = el; }} className="bg-white">
+                      {/* الهيدر — نفس ستايل تقرير الشبكة */}
+                      <div className="flex items-center justify-between bg-sky-500">
+                        <h3 className="text-white font-bold text-lg px-5 py-3.5">تقرير الحالات — {providerName}</h3>
+                        <span className="bg-sky-700 text-white font-bold px-6 py-3.5 text-base">{dateLabel}</span>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-blue-900 text-white">
+                              <th className="p-2.5 text-right font-medium whitespace-nowrap">Account No.</th>
+                              <th className="p-2.5 text-right font-medium whitespace-nowrap">Account Name</th>
+                              <th className="p-2.5 text-center font-medium whitespace-nowrap">Total</th>
+                              <th className="p-2.5 text-center font-medium whitespace-nowrap">Active</th>
+                              {report.columns.map((c) => (
+                                <th key={c} className="p-2.5 text-center font-medium whitespace-nowrap">{c}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {report.rows.map((r, i) => (
+                              <tr key={r.account_no} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                                <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap" dir="ltr">{r.account_no}</td>
+                                <td className="p-2.5 text-slate-700 whitespace-nowrap">{r.account_name}</td>
+                                <td className="p-2.5 text-center font-bold text-slate-900">{r.total.toLocaleString()}</td>
+                                <td className="p-2.5 text-center font-semibold text-green-600">{r.active.toLocaleString()}</td>
+                                {report.columns.map((c) => (
+                                  <td key={c} className={`p-2.5 text-center ${r.byStatus[c] > 0 ? "font-semibold text-red-500" : "text-slate-300"}`}>
+                                    {r.byStatus[c].toLocaleString()}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-slate-800 text-white font-bold">
+                              <td className="p-2.5" colSpan={2}>Total</td>
+                              <td className="p-2.5 text-center">{report.totals.total.toLocaleString()}</td>
+                              <td className="p-2.5 text-center">{report.totals.active.toLocaleString()}</td>
+                              {report.columns.map((c) => (
+                                <td key={c} className="p-2.5 text-center">{report.totals.byStatus[c].toLocaleString()}</td>
+                              ))}
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+
+                      <div className="px-4 py-3 flex items-center justify-between bg-slate-800">
+                        <span className="text-sm font-semibold text-white">إجمالي الخطوط الموقوفة</span>
+                        <span className="text-lg font-bold text-red-400">
+                          {(report.totals.total - report.totals.active).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {!providerReports && !statusReportLoading && (
+            <p className="text-sm text-slate-400 text-center py-8 bg-white rounded-2xl border border-slate-100">اضغطي "عرض التقرير" لحساب توزيع الحالات على كل شبكة</p>
           )}
         </div>
 

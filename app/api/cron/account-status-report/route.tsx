@@ -5,7 +5,7 @@ import puppeteer from "puppeteer-core";
 import path from "node:path";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 function getSupabase() {
   return createClient(
@@ -28,12 +28,17 @@ interface AccountStatusReport {
   totals: { total: number; active: number; byStatus: Record<string, number> };
 }
 
-// ─── نفس منطق تقرير "الحالات حسب الأكونت" في شاشة تقرير أرقام الحساب ───
-async function getAccountStatusReport(): Promise<AccountStatusReport> {
+interface ProviderStatusReport {
+  providerName: string;
+  report: AccountStatusReport;
+}
+
+// ─── نفس منطق تقرير "الحالات حسب الأكونت" في شاشة تقرير أرقام الحساب — تقرير مستقل لكل شبكة ───
+async function getProviderStatusReports(): Promise<ProviderStatusReport[]> {
   const supabase = getSupabase();
 
   const [{ data: allAccounts }, { data: allStatuses }] = await Promise.all([
-    supabase.from("accounts").select("id, account_no, account_name"),
+    supabase.from("accounts").select("id, account_no, account_name, providers(name)"),
     supabase.from("line_statuses").select("id, name"),
   ]);
 
@@ -71,38 +76,50 @@ async function getAccountStatusReport(): Promise<AccountStatusReport> {
       statusTotals.set(name, (statusTotals.get(name) || 0) + count);
     });
   });
-  const columns = [...statusTotals.entries()]
+  const allColumns = [...statusTotals.entries()]
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1])
     .map(([name]) => name);
 
-  const rows: AccountStatusRow[] = (allAccounts || [])
+  interface FullRow extends AccountStatusRow { providerName: string }
+  const allRows: FullRow[] = (allAccounts || [])
     .map((a: any) => {
       const agg = accountAgg.get(a.id);
       const total = agg?.total || 0;
       const active = agg?.byStatus.get("Active") || agg?.byStatus.get("active") || 0;
       const byStatus: Record<string, number> = {};
-      columns.forEach((c) => { byStatus[c] = agg?.byStatus.get(c) || 0; });
+      allColumns.forEach((c) => { byStatus[c] = agg?.byStatus.get(c) || 0; });
       return {
         account_no: a.account_no,
         account_name: a.account_name || "—",
+        providerName: a.providers?.name || "—",
         total, active, byStatus,
       };
     })
-    .filter((r) => r.total > 0)
-    .sort((a, b) => a.account_no.localeCompare(b.account_no));
+    .filter((r: FullRow) => r.total > 0)
+    .sort((a: FullRow, b: FullRow) => a.account_no.localeCompare(b.account_no));
 
-  const totals = rows.reduce(
-    (acc, r) => {
-      acc.total += r.total;
-      acc.active += r.active;
-      columns.forEach((c) => { acc.byStatus[c] = (acc.byStatus[c] || 0) + r.byStatus[c]; });
-      return acc;
-    },
-    { total: 0, active: 0, byStatus: Object.fromEntries(columns.map((c) => [c, 0])) as Record<string, number> }
-  );
+  const providerNames = [...new Set(allRows.map((r) => r.providerName))].sort();
 
-  return { columns, rows, totals };
+  return providerNames.map((providerName) => {
+    const rows = allRows.filter((r) => r.providerName === providerName);
+    const columns = allColumns.filter((c) => rows.some((r) => r.byStatus[c] > 0));
+    const provRows: AccountStatusRow[] = rows.map((r) => {
+      const byStatus: Record<string, number> = {};
+      columns.forEach((c) => { byStatus[c] = r.byStatus[c]; });
+      return { account_no: r.account_no, account_name: r.account_name, total: r.total, active: r.active, byStatus };
+    });
+    const totals = provRows.reduce(
+      (acc, r) => {
+        acc.total += r.total;
+        acc.active += r.active;
+        columns.forEach((c) => { acc.byStatus[c] = (acc.byStatus[c] || 0) + r.byStatus[c]; });
+        return acc;
+      },
+      { total: 0, active: 0, byStatus: Object.fromEntries(columns.map((c) => [c, 0])) as Record<string, number> }
+    );
+    return { providerName, report: { columns, rows: provRows, totals } };
+  });
 }
 
 async function loadArabicFontBase64(): Promise<{ base64: string; format: string }> {
@@ -128,14 +145,13 @@ async function loadArabicFontBase64(): Promise<{ base64: string; format: string 
   return { base64: btoa(binary), format: match[2] };
 }
 
-function buildHtml(report: AccountStatusReport, font: { base64: string; format: string }) {
-  const now = new Date();
-  const dateLabel = now.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
+function buildHtml(providerName: string, report: AccountStatusReport, font: { base64: string; format: string }) {
+  const dateLabel = new Date().toLocaleDateString("en-CA").replace(/-/g, "/");
   const suspended = report.totals.total - report.totals.active;
 
   const headerCols = `
-    <th>رقم الأكونت</th>
-    <th>اسم الأكونت</th>
+    <th class="right">Account No.</th>
+    <th class="right">Account Name</th>
     <th>Total</th>
     <th>Active</th>
     ${report.columns.map((c) => `<th>${c}</th>`).join("")}
@@ -143,8 +159,8 @@ function buildHtml(report: AccountStatusReport, font: { base64: string; format: 
 
   const rowsHtml = report.rows.map((r, i) => `
     <tr class="${i % 2 === 0 ? "" : "alt"}">
-      <td class="ltr">${r.account_no}</td>
-      <td>${r.account_name}</td>
+      <td class="right ltr">${r.account_no}</td>
+      <td class="right">${r.account_name}</td>
       <td class="num bold">${r.total.toLocaleString()}</td>
       <td class="num green">${r.active.toLocaleString()}</td>
       ${report.columns.map((c) => `<td class="num ${r.byStatus[c] > 0 ? "red" : "dim"}">${r.byStatus[c].toLocaleString()}</td>`).join("")}
@@ -153,7 +169,7 @@ function buildHtml(report: AccountStatusReport, font: { base64: string; format: 
 
   const footerHtml = `
     <tr class="foot">
-      <td colspan="2">Total</td>
+      <td colspan="2" class="right">Total</td>
       <td class="num">${report.totals.total.toLocaleString()}</td>
       <td class="num">${report.totals.active.toLocaleString()}</td>
       ${report.columns.map((c) => `<td class="num">${report.totals.byStatus[c].toLocaleString()}</td>`).join("")}
@@ -171,29 +187,33 @@ function buildHtml(report: AccountStatusReport, font: { base64: string; format: 
           src: url(data:font/${font.format === "woff2" ? "woff2" : "truetype"};charset=utf-8;base64,${font.base64}) format('${font.format}');
         }
         * { margin:0; padding:0; box-sizing:border-box; font-family:'ArFont', Arial, sans-serif; }
-        body { background:#f8fafc; padding: 24px; direction: rtl; color:#1e293b; }
-        .sub { color:#64748b; font-size:13px; margin-bottom:4px; }
-        .title { font-size:22px; font-weight:bold; margin-bottom:16px; }
-        table { border-collapse: collapse; width: 100%; background:white; }
-        th { background:#1d4ed8; color:white; padding:9px 10px; font-size:13px; font-weight:bold; white-space:nowrap; text-align:center; }
-        th:nth-child(1), th:nth-child(2) { text-align:right; }
+        body { background:white; direction: rtl; color:#1e293b; }
+        .header { display:flex; align-items:center; justify-content:space-between; background:#0ea5e9; }
+        .header h1 { color:white; font-size:19px; font-weight:bold; padding: 15px 22px; }
+        .header .date { background:#0369a1; color:white; font-size:16px; font-weight:bold; padding: 15px 26px; white-space:nowrap; }
+        table { border-collapse: collapse; width: 100%; }
+        th { background:#1e3a8a; color:white; padding:9px 10px; font-size:13px; font-weight:bold; white-space:nowrap; text-align:center; }
+        th.right { text-align:right; }
         td { padding:8px 10px; font-size:13px; white-space:nowrap; border-bottom:1px solid #e2e8f0; }
         td.num { text-align:center; }
-        td.ltr { direction: ltr; text-align:right; }
+        td.right { text-align:right; }
+        td.ltr { direction: ltr; }
         td.bold { font-weight:bold; }
         td.green { color:#16a34a; font-weight:600; }
         td.red { color:#ef4444; font-weight:600; }
         td.dim { color:#cbd5e1; }
         tr.alt td { background:#f8fafc; }
         tr.foot td { background:#1e293b; color:white; font-weight:bold; }
-        .suspended-box { margin-top:14px; background:#f1f5f9; border-radius:12px; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; }
-        .suspended-label { font-size:14px; font-weight:600; color:#475569; }
-        .suspended-value { font-size:20px; font-weight:bold; color:#ef4444; }
+        .suspended-box { padding:14px 22px; background:#1e293b; display:flex; align-items:center; justify-content:space-between; border-top: 2px solid #0f172a; }
+        .suspended-label { font-size:14px; font-weight:600; color:white; }
+        .suspended-value { font-size:20px; font-weight:bold; color:#f87171; }
       </style>
     </head>
     <body>
-      <div class="sub">${dateLabel}</div>
-      <div class="title">تقرير الحالات حسب الأكونت</div>
+      <div class="header">
+        <h1>تقرير الحالات — ${providerName}</h1>
+        <span class="date">${dateLabel}</span>
+      </div>
       <table>
         <thead><tr>${headerCols}</tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -208,18 +228,13 @@ function buildHtml(report: AccountStatusReport, font: { base64: string; format: 
   `;
 }
 
-async function renderImage(html: string, width: number): Promise<Buffer> {
-  const executablePath = await chromium.executablePath();
-  process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
-
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    executablePath,
-    headless: true,
-  });
-
+async function renderImage(
+  browser: Awaited<ReturnType<typeof puppeteer.launch>>,
+  html: string,
+  width: number
+): Promise<Buffer> {
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
     await page.setViewport({ width, height: 800 });
     await page.setContent(html, { waitUntil: "networkidle0" });
     await new Promise((r) => setTimeout(r, 500));
@@ -230,7 +245,7 @@ async function renderImage(html: string, width: number): Promise<Buffer> {
     const screenshot = await page.screenshot({ type: "png" });
     return screenshot as Buffer;
   } finally {
-    await browser.close();
+    await page.close();
   }
 }
 
@@ -269,27 +284,40 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const report = await getAccountStatusReport();
+    const providerReports = (await getProviderStatusReports()).filter((p) => p.report.rows.length > 0);
 
-    if (report.rows.length === 0) {
+    if (providerReports.length === 0) {
       return NextResponse.json({ success: true, message: "مفيش بيانات للتقرير — تم التخطي" });
     }
 
     const font = await loadArabicFontBase64();
-    // عرض الصورة بيكبر مع عدد أعمدة الحالات عشان الجدول ميتقصفش
-    const width = Math.min(2200, 480 + (report.columns.length + 2) * 130);
-    const html = buildHtml(report, font);
-    const imageBuffer = await renderImage(html, width);
+
+    const executablePath = await chromium.executablePath();
+    process.env.LD_LIBRARY_PATH = `${path.dirname(executablePath)}:${process.env.LD_LIBRARY_PATH || ""}`;
+    const browser = await puppeteer.launch({ args: chromium.args, executablePath, headless: true });
 
     const chatId = process.env.TELEGRAM_CHAT_ID_ACCOUNTS || process.env.TELEGRAM_CHAT_ID_COLLECTION!;
-    let result = await sendTelegramPhoto(chatId, imageBuffer, "📊 تقرير الحالات حسب الأكونت");
+    const results: { provider: string; telegram: any }[] = [];
 
-    // لو الصورة كبيرة جداً وتلجرام رفضها كـ Photo، ابعتيها كملف
-    if (!result.ok) {
-      result = await sendTelegramDocument(chatId, imageBuffer, "📊 تقرير الحالات حسب الأكونت");
+    try {
+      for (const { providerName, report } of providerReports) {
+        // عرض الصورة بيكبر مع عدد أعمدة الحالات عشان الجدول ميتقصفش
+        const width = Math.min(2200, 480 + (report.columns.length + 2) * 130);
+        const html = buildHtml(providerName, report, font);
+        const imageBuffer = await renderImage(browser, html, width);
+
+        let telegram = await sendTelegramPhoto(chatId, imageBuffer, `📊 تقرير الحالات — ${providerName}`);
+        // لو الصورة كبيرة جداً وتلجرام رفضها كـ Photo، ابعتيها كملف
+        if (!telegram.ok) {
+          telegram = await sendTelegramDocument(chatId, imageBuffer, `📊 تقرير الحالات — ${providerName}`);
+        }
+        results.push({ provider: providerName, telegram });
+      }
+    } finally {
+      await browser.close();
     }
 
-    return NextResponse.json({ success: true, telegram: result });
+    return NextResponse.json({ success: true, results });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : "خطأ غير متوقع" },
