@@ -164,8 +164,7 @@ function resolveRowSync(
 
   const agentName = str(row["agent_name"]);
   const agent_id = agentName ? lookupId(cache, "agents", agentName) : null;
-  if (!agentName) rowErrors.push(`عمود agent_name فاضي أو ناقص`);
-  else if (!agent_id) rowErrors.push(`المندوب "${agentName}" غير موجود`);
+ 
 
   const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
   const clientNationalId = getRowField(row, "national_id", "الرقم القومي");
