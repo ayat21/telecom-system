@@ -1041,10 +1041,10 @@ export default function ImportPage() {
             } else {
               // أول ID فقط
               newClientId = matchingClients[0].id;
-              clientIdByName.set(
-                normalizedName,
-                newClientId
-              );
+             clientIdByName.set(
+  normalizedName,
+  newClientId ?? null
+);
             }
           }
 
