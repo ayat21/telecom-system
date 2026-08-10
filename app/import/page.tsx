@@ -1243,12 +1243,10 @@ const hasErrors =
   noName > 0;
 
 setResult({
-  status: hasErrors ? "error" : "success",
-
+  status: "success",
   message: hasErrors
     ? "تمت العملية مع وجود بعض الأخطاء ⚠️"
     : "تم تحديث ربط العملاء بنجاح ✅",
-
   details:
     `تم تحديث: ${updated} | ` +
     `تم تغيير الـClient ID: ${linked} | ` +
@@ -1256,7 +1254,6 @@ setResult({
     `عملاء غير موجودين بالاسم: ${clientNotFound} | ` +
     `صفوف بدون اسم: ${noName} | ` +
     `أخطاء تحديث الخطوط: ${lineUpdateErrors}`,
-
   debugRows: errorDetails,
 });
 }
