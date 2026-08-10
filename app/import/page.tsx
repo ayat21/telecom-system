@@ -1236,33 +1236,29 @@ export default function ImportPage() {
   // Result
   // =========================================================
 
-  setResult({
-    status:
-      lineUpdateErrors === 0 &&
-      lineNotFound === 0 &&
-      clientNotFound === 0 &&
-      noName === 0
-        ? "success"
-        : "warning",
+const hasErrors =
+  lineUpdateErrors > 0 ||
+  lineNotFound > 0 ||
+  clientNotFound > 0 ||
+  noName > 0;
 
-    message:
-      lineUpdateErrors === 0 &&
-      lineNotFound === 0 &&
-      clientNotFound === 0 &&
-      noName === 0
-        ? "تم تحديث ربط العملاء بنجاح ✅"
-        : "تمت العملية مع وجود بعض المشاكل ⚠️",
+setResult({
+  status: hasErrors ? "warning" : "success",
 
-    details:
-      `تم تحديث: ${updated} | ` +
-      `تم تغيير الـClient ID: ${linked} | ` +
-      `خطوط غير موجودة: ${lineNotFound} | ` +
-      `عملاء غير موجودين بالاسم: ${clientNotFound} | ` +
-      `صفوف بدون اسم: ${noName} | ` +
-      `أخطاء تحديث الخطوط: ${lineUpdateErrors}`,
+  message: hasErrors
+    ? "تمت العملية مع وجود بعض المشاكل ⚠️"
+    : "تم تحديث ربط العملاء بنجاح ✅",
 
-    debugRows: errorDetails,
-  });
+  details:
+    `تم تحديث: ${updated} | ` +
+    `تم تغيير الـClient ID: ${linked} | ` +
+    `خطوط غير موجودة: ${lineNotFound} | ` +
+    `عملاء غير موجودين بالاسم: ${clientNotFound} | ` +
+    `صفوف بدون اسم: ${noName} | ` +
+    `أخطاء تحديث الخطوط: ${lineUpdateErrors}`,
+
+  debugRows: errorDetails,
+});
 }
 
 /*********************************************************************** */
