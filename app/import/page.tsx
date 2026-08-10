@@ -1243,10 +1243,10 @@ const hasErrors =
   noName > 0;
 
 setResult({
-  status: hasErrors ? "warning" : "success",
+  status: hasErrors ? "error" : "success",
 
   message: hasErrors
-    ? "تمت العملية مع وجود بعض المشاكل ⚠️"
+    ? "تمت العملية مع وجود بعض الأخطاء ⚠️"
     : "تم تحديث ربط العملاء بنجاح ✅",
 
   details:
