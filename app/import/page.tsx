@@ -869,196 +869,403 @@ export default function ImportPage() {
       }
 
       // ─── تحديث بيانات العملاء ─────────────────────────────
-      else if (importType === "update_clients") {
-        setProgressText(`جارٍ جلب بيانات الخطوط...`);
+ else if (importType === "update_clients") {
+  let updated = 0;
+  let linked = 0;
+  let lineUpdateErrors = 0;
+  let lineNotFound = 0;
+  let clientNotFound = 0;
+  let noName = 0;
 
-        // ─── الخطوة 1: جيبي client_id لكل رقم خط موجود في الشيت ───
-        const numbersInSheet = [...new Set(
-          rows.map((r) => normalizeLineNumber(r["number"])).filter(Boolean)
-        )];
-        const lineInfoByNumber = new Map<string, { client_id: number | null }>();
-        for (let i = 0; i < numbersInSheet.length; i += 1000) {
-          const { data, error } = await supabase
-            .from("lines")
-            .select("number, client_id")
-            .in("number", numbersInSheet.slice(i, i + 1000));
-          if (error) { console.error(error); continue; }
-          (data || []).forEach((l: any) => lineInfoByNumber.set(l.number, { client_id: l.client_id }));
-        }
+  const errorDetails: any[] = [];
 
-        // ─── الخطوة 2: للخطوط اللي من غير عميل — جهزّي بيانات عميل جديد لكل واحد ───
-        const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
-        const newClientKeyToData = new Map<string, { name: string; national_id: string | null; address: string | null }>();
-        const numberToNewClientKey = new Map<string, string>();
+  const normalizeClientName = (value: any): string => {
+    return String(value ?? "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  };
 
-        rows.forEach((row) => {
-          const number = normalizeLineNumber(row["number"]);
-          if (!number) return;
-          const lineInfo = lineInfoByNumber.get(number);
-          if (!lineInfo || lineInfo.client_id) return; // الخط مش موجود، أو عنده عميل بالفعل
+  setProgressText(
+    `جارٍ تحديث ${rows.length.toLocaleString()} خط...`
+  );
 
-          const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
-          const nationalId = getRowField(row, "national_id", "الرقم القومي");
-          const address = getRowField(row, "address", "العنوان");
-          if (!clientName) return; // مفيش اسم نعمل بيه عميل جديد
+  // =========================================================
+  // 1) نجيب كل أرقام الخطوط الموجودة في الشيت
+  // =========================================================
 
-          const key = nationalId ? `nid:${nationalId.toLowerCase()}` : `name:${normalize(clientName)}`;
-          if (!newClientKeyToData.has(key)) {
-            newClientKeyToData.set(key, { name: clientName, national_id: nationalId || null, address: address || null });
-          } else if (address && !newClientKeyToData.get(key)!.address) {
-            newClientKeyToData.get(key)!.address = address;
-          }
-          numberToNewClientKey.set(number, key);
-        });
+  const numbersInSheet = [
+    ...new Set(
+      rows
+        .map((row) => normalizeLineNumber(row["number"]))
+        .filter(Boolean)
+    ),
+  ];
 
-        // ─── الخطوة 3: قارني بعملاء موجودين بالفعل بالرقم القومي قبل إنشاء جديد ───
-        const keyToClientId = new Map<string, number>();
-        let created = 0;
-        if (newClientKeyToData.size > 0) {
-          setProgressText(`جارٍ التحقق من ${newClientKeyToData.size} عميل جديد...`);
-          const allClients = await fetchAllClients();
-          const existingByNid = new Map<string, number>();
-          allClients.forEach((c) => { if (c.national_id) existingByNid.set(c.national_id.toLowerCase(), c.id); });
+  // =========================================================
+  // 2) نجيب الـ client_id الحالي لكل خط
+  // =========================================================
 
-          const toCreate: { key: string; name: string; national_id: string | null; address: string | null }[] = [];
-          newClientKeyToData.forEach((data, key) => {
-            if (data.national_id && existingByNid.has(data.national_id.toLowerCase())) {
-              keyToClientId.set(key, existingByNid.get(data.national_id.toLowerCase())!);
-            } else {
-              toCreate.push({ key, ...data });
-            }
-          });
-
-          for (let i = 0; i < toCreate.length; i += 500) {
-  const batch = toCreate.slice(i, i + 500);
-  const withNid = batch.filter((b) => b.national_id);
-  const withoutNid = batch.filter((b) => !b.national_id);
-
-  // ─── اللي عندهم رقم قومي: upsert — لو موجود يتحدث، لو مش موجود يتعمل ───
-  if (withNid.length > 0) {
-  // بناخد الـ IDs من رجوع الـ upsert نفسه (مش استعلام SELECT منفصل) — عشان لو فيه
-  // RLS policy على clients بتقيّد SELECT بشكل مختلف عن INSERT/UPDATE، هنشوف الفرق
-  // فوراً بدل ما الصفوف دي تختفي بصمت من غير أي تفسير
-  const { data: upserted, error } = await supabase.from("clients")
-    .upsert(
-      withNid.map((b) => ({ name: b.name, national_id: b.national_id, address: b.address })),
-      { onConflict: "national_id" }
-    )
-    .select("id, national_id");
-
-  if (error) {
-    console.error("Upsert clients error:", error.message);
-  } else if (!upserted || upserted.length !== withNid.length) {
-    console.warn(
-      `[update_clients] الـ upsert رجّع ${upserted?.length ?? 0} صف بس من أصل ${withNid.length} ` +
-      `المفروض يتعملهم upsert — الاحتمال الأكبر إن فيه RLS policy على SELECT لجدول clients ` +
-      `أضيق من policy الـ INSERT/UPDATE، فالصف اتكتب فعلاً بس السيشن الحالية مش شايفاه.`,
-      {
-        اللي_المفروض_يرجع: withNid.map((b) => b.national_id),
-        اللي_رجع_فعلاً: (upserted || []).map((c) => c.national_id),
-      }
-    );
-    const idByNid = new Map<string, number>();
-    (upserted || []).forEach((c) => { if (c.national_id) idByNid.set(c.national_id, c.id); });
-    withNid.forEach((b) => {
-      if (!b.national_id) return;
-      const id = idByNid.get(b.national_id);
-      if (id) { keyToClientId.set(b.key, id); created++; }
-    });
-  } else {
-    upserted.forEach((c, idx) => {
-      keyToClientId.set(withNid[idx].key, c.id);
-      created++;
-    });
-  }
-}
-
-  // ─── اللي من غير رقم قومي: إضافة عادية (مفيش تعارض ممكن يحصل) ───
-  if (withoutNid.length > 0) {
-    const { data, error } = await supabase.from("clients")
-      .insert(withoutNid.map((b) => ({ name: b.name, national_id: null, address: b.address })))
-      .select("id");
-    if (!error) {
-      (data || []).forEach((c, idx) => { keyToClientId.set(withoutNid[idx].key, c.id); created++; });
+  const lineInfoByNumber = new Map<
+    string,
+    {
+      client_id: number | null;
     }
+  >();
+
+  for (let i = 0; i < numbersInSheet.length; i += 1000) {
+    const chunk = numbersInSheet.slice(i, i + 1000);
+
+    const { data, error } = await supabase
+      .from("lines")
+      .select("number, client_id")
+      .in("number", chunk);
+
+    if (error) {
+      throw new Error(
+        `خطأ أثناء جلب بيانات الخطوط: ${error.message}`
+      );
+    }
+
+    (data || []).forEach((line: any) => {
+      lineInfoByNumber.set(line.number, {
+        client_id: line.client_id ?? null,
+      });
+    });
   }
-}
+
+  // =========================================================
+  // 3) Cache لأسماء العملاء
+  //
+  // نفس الاسم لو موجود 5 مرات:
+  // نستخدم أول ID فقط
+  // =========================================================
+
+  const clientIdByName = new Map<string, number | null>();
+
+  // =========================================================
+  // 4) معالجة كل صف في الشيت
+  // =========================================================
+
+  for (let i = 0; i < rows.length; i += 1000) {
+    const batch = rows.slice(i, i + 1000);
+
+    await Promise.all(
+      batch.map(async (row) => {
+        const number = normalizeLineNumber(row["number"]);
+
+        if (!number) {
+          return;
         }
 
-        // ─── الخطوة 4: اربطي كل خط بعميله (موجود أو جديد) وحدّثي بياناته ───
-        let updated = 0;
-        let linked = 0;
-        let lineNotFound = 0;
-        let noClientCreated = 0;
-        let noUpdates = 0;
-        const noClientCreatedDetails: any[] = [];
-        const rawSamples: any[] = [];
+        try {
+          // ---------------------------------------------------
+          // اسم العميل الجديد من الشيت
+          // ---------------------------------------------------
 
-        setProgressText(`جارٍ تحديث ${rows.length.toLocaleString()} سجل...`);
-        for (let i = 0; i < rows.length; i += 100) {
-          const batch = rows.slice(i, i + 100);
+          const clientName = getRowField(
+            row,
+            "client_name",
+            "اسم العميل",
+            "name",
+            "الاسم"
+          );
 
-          await Promise.all(batch.map(async (row) => {
-            const number = normalizeLineNumber(row["number"]);
-            if (!number) return;
+          if (!clientName || !String(clientName).trim()) {
+            noName++;
 
-            const lineInfo = lineInfoByNumber.get(number);
-            if (!lineInfo) { lineNotFound++; return; }
-
-            let clientId = lineInfo.client_id;
-
-            if (!clientId) {
-              const newKey = numberToNewClientKey.get(number);
-              const resolvedId = newKey ? keyToClientId.get(newKey) : undefined;
-              if (!resolvedId) {
-                noClientCreated++;
-                noClientCreatedDetails.push({
-                  رقم_الخط: number,
-                  اسم_العميل_بالشيت: getRowField(row, "client_name", "اسم العميل", "name", "الاسم"),
-                  الرقم_القومي_بالشيت: getRowField(row, "national_id", "الرقم القومي"),
-                  المفتاح_المتوقع: newKey ?? "(مفيش اسم/رقم قومي في الصف أصلاً)",
-                  اتحل_في_الخطوة_3: newKey ? keyToClientId.has(newKey) : false,
-                });
-                if (rawSamples.length < 5) rawSamples.push(row);
-                return;
-              }
-              await supabase.from("lines").update({ client_id: resolvedId }).eq("number", number);
-              clientId = resolvedId;
-              linked++;
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                type: "NO_CLIENT_NAME",
+                message: "اسم العميل غير موجود في الشيت",
+              });
             }
 
-            const updates: Record<string, any> = {};
-            const clientName = getRowField(row, "client_name", "اسم العميل", "name", "الاسم");
-            const nationalId = getRowField(row, "national_id", "الرقم القومي");
-            const address = getRowField(row, "address", "العنوان");
+            return;
+          }
 
-            if (clientName) updates.name = clientName;
-            if (nationalId) updates.national_id = nationalId;
-            if (address) updates.address = address;
+          const normalizedName =
+            normalizeClientName(clientName);
 
-            if (Object.keys(updates).length === 0) { noUpdates++; return; }
+          // ---------------------------------------------------
+          // الخط موجود في النظام؟
+          // ---------------------------------------------------
 
-            await supabase.from("clients").update(updates).eq("id", clientId);
+          const lineInfo = lineInfoByNumber.get(number);
+
+          if (!lineInfo) {
+            lineNotFound++;
+
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                type: "LINE_NOT_FOUND",
+                message: "رقم الخط غير موجود في جدول lines",
+              });
+            }
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // نجيب client_id الخاص بالاسم الجديد
+          // ---------------------------------------------------
+
+          let newClientId = clientIdByName.get(normalizedName);
+
+          // مهم:
+          // has() عشان نفرق بين:
+          // الاسم مش موجود في الـMap
+          // والاسم موجود لكن قيمته null
+          if (!clientIdByName.has(normalizedName)) {
+            const {
+              data: matchingClients,
+              error: clientSearchError,
+            } = await supabase
+              .from("clients")
+              .select("id, name")
+              .ilike("name", String(clientName).trim())
+              .order("id", { ascending: true })
+              .limit(1);
+
+            if (clientSearchError) {
+              throw new Error(
+                `خطأ في البحث عن العميل "${clientName}": ${clientSearchError.message}`
+              );
+            }
+
+            if (!matchingClients || matchingClients.length === 0) {
+              clientIdByName.set(normalizedName, null);
+              newClientId = null;
+            } else {
+              // أول ID فقط
+              newClientId = matchingClients[0].id;
+              clientIdByName.set(
+                normalizedName,
+                newClientId
+              );
+            }
+          }
+
+          // ---------------------------------------------------
+          // الاسم مش موجود في clients
+          // ممنوع نعمل Client جديد
+          // ---------------------------------------------------
+
+          if (!newClientId) {
+            clientNotFound++;
+
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                clientName: String(clientName).trim(),
+                oldClientId: lineInfo.client_id,
+                type: "CLIENT_NOT_FOUND",
+                message:
+                  "اسم العميل غير موجود في جدول clients",
+              });
+            }
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // الـID القديم
+          // ---------------------------------------------------
+
+          const oldClientId = lineInfo.client_id;
+
+          // ---------------------------------------------------
+          // لو نفس الـID بالفعل
+          // مفيش حاجة نعملها
+          // ---------------------------------------------------
+
+          if (
+            oldClientId !== null &&
+            Number(oldClientId) === Number(newClientId)
+          ) {
             updated++;
-          }));
+            return;
+          }
 
-          setProgressPercent(Math.round(((i + 100) / rows.length) * 100));
-          setProgressText(`تم معالجة ${Math.min(i + 100, rows.length).toLocaleString()} من ${rows.length.toLocaleString()}...`);
+          // ---------------------------------------------------
+          // أهم خطوة:
+          //
+          // نشيل الـclient_id القديم
+          // ونحط الـclient_id الجديد
+          //
+          // لا نعدل جدول clients
+          // ---------------------------------------------------
+
+          const { data: updatedLine, error: lineUpdateError } =
+            await supabase
+              .from("lines")
+              .update({
+                client_id: newClientId,
+              })
+              .eq("number", number)
+              .select("number, client_id")
+              .maybeSingle();
+
+          if (lineUpdateError) {
+            lineUpdateErrors++;
+
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                oldClientId,
+                newClientId,
+                clientName: String(clientName).trim(),
+                type: "LINE_UPDATE_ERROR",
+                error: lineUpdateError.message,
+              });
+            }
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // نتأكد إن الـUPDATE حصل فعلاً
+          // ---------------------------------------------------
+
+          if (!updatedLine) {
+            lineUpdateErrors++;
+
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                oldClientId,
+                newClientId,
+                clientName: String(clientName).trim(),
+                type: "NO_UPDATED_ROW",
+                message:
+                  "Supabase لم يرجع الخط بعد عملية التحديث",
+              });
+            }
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // تأكيد إن الـclient_id بقى الجديد
+          // ---------------------------------------------------
+
+          if (
+            Number(updatedLine.client_id) !==
+            Number(newClientId)
+          ) {
+            lineUpdateErrors++;
+
+            if (errorDetails.length < 1000) {
+              errorDetails.push({
+                number,
+                oldClientId,
+                newClientId,
+                actualClientId: updatedLine.client_id,
+                clientName: String(clientName).trim(),
+                type: "CLIENT_ID_NOT_CHANGED",
+              });
+            }
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // نجاح
+          // ---------------------------------------------------
+
+          updated++;
+
+          if (
+            oldClientId === null ||
+            Number(oldClientId) !== Number(newClientId)
+          ) {
+            linked++;
+          }
+        } catch (err) {
+          lineUpdateErrors++;
+
+          if (errorDetails.length < 1000) {
+            errorDetails.push({
+              number,
+              type: "UNEXPECTED_ERROR",
+              error:
+                err instanceof Error
+                  ? err.message
+                  : String(err),
+            });
+          }
         }
+      })
+    );
 
-        if (noClientCreatedDetails.length > 0) {
-          console.warn(`[update_clients] ${noClientCreatedDetails.length} خط فضل من غير عميل — التفاصيل:`);
-          console.table(noClientCreatedDetails);
-        }
+    // ---------------------------------------------------------
+    // Progress
+    // ---------------------------------------------------------
 
-        setResult({
-          status: "success",
-          message: "تم تحديث بيانات العملاء بنجاح ✅",
-          details: `تم تحديث: ${updated} | عملاء جدد اتعملوا: ${created} | خطوط اترّبطت بعميل جديد/موجود: ${linked} | رقم الخط مش موجود بالنظام: ${lineNotFound} | خط من غير عميل ومفيش اسم بالشيت نعمل بيه عميل: ${noClientCreated} | بدون تغيير: ${noUpdates}`,
-          debugColumns: rows.length > 0 ? Object.keys(rows[0]) : [],
-          debugRows: rawSamples,
-        });
-      }
+    const processed = Math.min(
+      i + batch.length,
+      rows.length
+    );
+
+    setProgressPercent(
+      Math.round((processed / rows.length) * 100)
+    );
+
+    setProgressText(
+      `تم معالجة ${processed.toLocaleString()} من ${rows.length.toLocaleString()}...`
+    );
+  }
+
+  // =========================================================
+  // Debug
+  // =========================================================
+
+  console.log("========== UPDATE CLIENTS ==========");
+  console.log("Updated:", updated);
+  console.log("Linked:", linked);
+  console.log("Line Update Errors:", lineUpdateErrors);
+  console.log("Line Not Found:", lineNotFound);
+  console.log("Client Not Found:", clientNotFound);
+  console.log("No Client Name:", noName);
+  console.table(errorDetails);
+  console.log("====================================");
+
+  // =========================================================
+  // Result
+  // =========================================================
+
+  setResult({
+    status:
+      lineUpdateErrors === 0 &&
+      lineNotFound === 0 &&
+      clientNotFound === 0 &&
+      noName === 0
+        ? "success"
+        : "warning",
+
+    message:
+      lineUpdateErrors === 0 &&
+      lineNotFound === 0 &&
+      clientNotFound === 0 &&
+      noName === 0
+        ? "تم تحديث ربط العملاء بنجاح ✅"
+        : "تمت العملية مع وجود بعض المشاكل ⚠️",
+
+    details:
+      `تم تحديث: ${updated} | ` +
+      `تم تغيير الـClient ID: ${linked} | ` +
+      `خطوط غير موجودة: ${lineNotFound} | ` +
+      `عملاء غير موجودين بالاسم: ${clientNotFound} | ` +
+      `صفوف بدون اسم: ${noName} | ` +
+      `أخطاء تحديث الخطوط: ${lineUpdateErrors}`,
+
+    debugRows: errorDetails,
+  });
+}
+
+/*********************************************************************** */
 
     } catch (err) {
       setResult({

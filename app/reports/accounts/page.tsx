@@ -328,7 +328,7 @@ export default function AccountsPage() {
         useCORS: true,
       });
       const link = document.createElement("a");
-      link.download = `تقرير_الحالات_${providerName}_${new Date().toISOString().slice(0, 10)}.png`;
+     // link.download = `تقرير_الحالات_${providerName}_${new Date().toISOString().slice(0, 10)}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
@@ -373,13 +373,13 @@ export default function AccountsPage() {
       provider_id: Number(form.provider_id),
     };
 
-    if (editingId) {
+   /* if (editingId) {
       const { error } = await supabase.from("accounts").update(payload).eq("id", editingId);
       if (error) { alert(error.message); setSaving(false); return; }
     } else {
       const { error } = await supabase.from("accounts").insert(payload);
       if (error) { alert(error.message); setSaving(false); return; }
-    }
+    }*/
 
     setSaving(false);
     setModalOpen(false);
@@ -628,7 +628,7 @@ export default function AccountsPage() {
           {providerReports && providerReports.length > 0 && (
             <div className="space-y-5">
               {providerReports.map(({ providerName, report }) => {
-                const dateLabel = new Date().toLocaleDateString("en-CA").replace(/-/g, "/");
+               // const dateLabel = new Date().toLocaleDateString("en-CA").replace(/-/g, "/");
                 return (
                   <div key={providerName} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                     <div className="flex items-center justify-end gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-100">
@@ -643,7 +643,6 @@ export default function AccountsPage() {
                       {/* الهيدر — نفس ستايل تقرير الشبكة */}
                       <div className="flex items-center justify-between bg-sky-500">
                         <h3 className="text-white font-bold text-lg px-5 py-3.5">تقرير الحالات — {providerName}</h3>
-                        <span className="bg-sky-700 text-white font-bold px-6 py-3.5 text-base">{dateLabel}</span>
                       </div>
 
                       <div className="overflow-x-auto">
@@ -801,7 +800,7 @@ export default function AccountsPage() {
                   return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${color.bg} ${color.text}`}>{a.providers?.name || "—"}</span>;
                 }},
                 { key: "_lines_count", label: "عدد الخطوط", className: "font-bold text-slate-900" },
-                { key: "created_at", label: "تاريخ الإضافة", render: (a) => new Date(a.created_at).toLocaleDateString("ar-EG") },
+                //{ key: "created_at", label: "تاريخ الإضافة", render: (a) => new Date(a.created_at).toLocaleDateString("ar-EG") },
               ]}
               data={accounts}
               actions={(account) => (
