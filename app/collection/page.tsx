@@ -90,7 +90,7 @@ export default function CollectionDashboardPage() {
       }
       return q;
     }*/
-  function buildQuery() {
+   function buildQuery() {
   let q = supabase
     .from("lines")
     .select(`
