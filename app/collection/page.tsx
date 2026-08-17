@@ -71,7 +71,7 @@ export default function CollectionDashboardPage() {
     setDataLoaded(false);
 
     // ─── جيبي الخطوط حسب الفلاتر ──────────────────────────
-    function buildQuery() {
+    /*function buildQuery() {
       let q = supabase
         .from("lines")
         .select(`
@@ -89,7 +89,48 @@ export default function CollectionDashboardPage() {
         q = q.eq("department_id", Number(filterDepartment));
       }
       return q;
+    }*/
+  function buildQuery() {
+  let q = supabase
+    .from("lines")
+    .select(`
+      id,
+      number,
+      total_price,
+      provider_id,
+      providers(name),
+      clients(name)
+    `)
+    .or("is_deleted.is.null,is_deleted.eq.false");
+
+  if (filterPlace) {
+    const [type, id] = filterPlace.split("_");
+
+    if (type === "a") {
+      q = q.eq("almanafiz_id", Number(id));
+    } else if (type === "h") {
+      q = q.eq("heiaat_id", Number(id));
     }
+  }
+
+  // لو قسم معين متحدد
+  if (
+    filterDepartment &&
+    filterDepartment !== "all" &&
+    filterDepartment !== "كل الأقسام"
+  ) {
+    q = q.eq("department_id", Number(filterDepartment));
+  } else {
+    // كل الأقسام → استبعاد Free + SPOC + هيئات
+    q = q.not(
+      "department_id",
+      "in",
+      "(4,9,8)"
+    );
+  }
+
+  return q;
+}
 
     // جيبي كل الخطوط في batches
     const allLines: any[] = [];
