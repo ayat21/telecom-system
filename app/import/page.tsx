@@ -548,7 +548,7 @@ export default function ImportPage() {
       // ─── تغيير مجمع ───────────────────────────────────────
       else if (importType === "bulk_update") {
         const NAME_COLS = [
-          "provider_name", "almanafiz_name", "agent_name", "line_status_name",
+          "provider_name", "almanafiz_name", "agent_name", "line_status_name","customer_date_real",
           "calls_package_name", "internet_package_name", "line_extension_name", "account_no",
         ];
         const CLIENT_COLS = ["client_name", "national_id", "address"];
@@ -622,6 +622,7 @@ export default function ImportPage() {
                   case "calls_package_name": updates.calls_package_id = resolved.calls_package_id; break;
                   case "internet_package_name": updates.internet_package_id = resolved.internet_package_id; break;
                   case "line_extension_name": updates.line_extension_id = resolved.line_extension_id; break;
+                  case "customer_date_real": updates.customer_date_real = resolved.customer_date_real; break;
                   case "calls_package_price": updates.calls_package_price = Number(row[col] || 0); break;
                   case "internet_package_price": updates.internet_package_price = Number(row[col] || 0); break;
                   case "line_extension_price": updates.line_extension_price = Number(row[col] || 0); break;

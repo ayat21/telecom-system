@@ -749,10 +749,20 @@ export default function EditLine({ params }: { params: Promise<{ id: string }> }
                 onChange={(e) => setLine({ ...line, serial_number: e.target.value })}
                 placeholder="سيريال نمبر" />
             </FieldWrap>
-            <FieldWrap label="تاريخ العميل" icon={Calendar}>
-              <input type="date" className={inputClass} value={line.customer_date_real || ""}
-                onChange={(e) => setLine({ ...line, customer_date_real: e.target.value })} />
-            </FieldWrap>
+          <FieldWrap label="تاريخ العميل" icon={Calendar}>
+  <input
+    type="text"
+    className={inputClass}
+    placeholder="YYYY-MM-DD"
+    value={line.customer_date_real || ""}
+    onChange={(e) =>
+      setLine({
+        ...line,
+        customer_date_real: e.target.value,
+      })
+    }
+  />
+</FieldWrap>
             <FieldWrap label="صورة بطاقة العميل" icon={ImagePlus}>
               <label className={`${inputClass} flex items-center gap-2 cursor-pointer text-slate-500 hover:bg-slate-50`}>
                 <Upload className="w-4 h-4 shrink-0" />
