@@ -121,7 +121,7 @@ export default function CollectionDashboardPage() {
   ) {
     q = q.eq("department_id", Number(filterDepartment));
   } else {
-    // كل الأقسام → استبعاد Free + SPOC + هيئات
+    // كل الأقسام → استبعاد Free + SPOC +  hghhghghghghghghgهيئات
     q = q.not(
       "department_id",
       "in",
